@@ -141,4 +141,28 @@ class ServiceStore(context: Context) {
         key = "probtest_state",
         defaultValue = ""
     )
+
+    // WebDAV backup destination. The base URL must end with "/" when a remote
+    // path is also given; the final file name is appended by the backup manager.
+    var webdavUrl by store.string(
+        key = "webdav_url",
+        defaultValue = ""
+    )
+
+    var webdavUsername by store.string(
+        key = "webdav_username",
+        defaultValue = ""
+    )
+
+    var webdavPassword by store.string(
+        key = "webdav_password",
+        defaultValue = ""
+    )
+
+    // Folder the backup file is written to on the server. May be empty, which
+    // means the root of the WebDAV base URL.
+    var webdavPath by store.string(
+        key = "webdav_path",
+        defaultValue = ""
+    )
 }

@@ -28,6 +28,8 @@ class SettingsActivity : BaseActivity<SettingsDesign>() {
                             startActivity(MetaFeatureSettingsActivity::class.intent)
                         SettingsDesign.Request.StartProbTest ->
                             startActivity(ProbTestSettingsActivity::class.intent)
+                        SettingsDesign.Request.StartBackup ->
+                            startActivity(BackupSettingsActivity::class.intent)
                     }
                 }
             }
