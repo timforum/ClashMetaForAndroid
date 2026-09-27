@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"time"
 
-	P "github.com/metacubex/mihomo/adapter/provider"
 	"github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
 )
 
 var ErrInvalidType = errors.New("invalid type")
+
+type updatableProvider interface {
+	UpdatedAt() time.Time
+}
 
 type Provider struct {
 	Name        string `json:"name"`
@@ -49,7 +52,7 @@ func QueryProviders() []*Provider {
 	for _, p := range providers {
 		updatedAt := time.Time{}
 
-		if s, ok := p.(P.UpdatableProvider); ok {
+		if s, ok := p.(updatableProvider); ok {
 			updatedAt = s.UpdatedAt()
 		}
 

@@ -13,7 +13,6 @@ import (
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/mihomo/config"
-	"github.com/metacubex/mihomo/dns"
 )
 
 var processors = []processor{
@@ -69,7 +68,7 @@ func patchDns(cfg *config.RawConfig, _ string) error {
 	}
 
 	if cfg.ClashForAndroid.AppendSystemDNS {
-		cfg.DNS.NameServer = append(cfg.DNS.NameServer, "dhcp://"+dns.SystemDNSPlaceholder)
+		cfg.DNS.NameServer = append(cfg.DNS.NameServer, "dhcp://system")
 	}
 
 	return nil

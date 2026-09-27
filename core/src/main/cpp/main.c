@@ -236,6 +236,22 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeFetchAndValid(JNIEnv *env, 
 }
 
 JNIEXPORT jstring JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeProbTest(JNIEnv *env, jobject thiz,
+                                                              jobject callback,
+                                                              jstring raw_yaml,
+                                                              jstring options) {
+    TRACE_METHOD();
+
+    jobject _callback = new_global(callback);
+    scoped_string _raw_yaml = get_string(raw_yaml);
+    scoped_string _options = get_string(options);
+
+    scoped_string response = runProbTest(_callback, _raw_yaml, _options);
+
+    return new_string(response);
+}
+
+JNIEXPORT jstring JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeQueryProviders(JNIEnv *env, jobject thiz) {
     TRACE_METHOD();
 
