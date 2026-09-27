@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -54,6 +56,33 @@ func (s *sortableProxyList) Swap(i, j int) {
 	s.list[i], s.list[j] = s.list[j], s.list[i]
 }
 
+// globalGroup returns the GLOBAL group, which is what the strategy list is
+// derived from.
+//
+// Every type assertion here is checked on purpose. The upstream ProxyGroup
+// interface gained methods, and a group type that does not implement all of
+// them (Relay used to, and the interface is only asserted for Fallback,
+// LoadBalance, URLTest and Selector) would take the whole service process
+// down with an unrecovered panic the moment the proxy screen was opened.
+func globalGroup() (outboundgroup.ProxyGroup, error) {
+	p := tunnel.Proxies()["GLOBAL"]
+	if p == nil {
+		return nil, errors.New("GLOBAL group is missing, the configuration is not loaded")
+	}
+
+	proxy, ok := p.(*adapter.Proxy)
+	if !ok {
+		return nil, fmt.Errorf("GLOBAL group is a %T, want *adapter.Proxy", p)
+	}
+
+	group, ok := proxy.ProxyAdapter.(outboundgroup.ProxyGroup)
+	if !ok {
+		return nil, fmt.Errorf("GLOBAL group is a %s, which is not a proxy group", proxy.Type())
+	}
+
+	return group, nil
+}
+
 func QueryProxyGroupNames(excludeNotSelectable bool) []string {
 	mode := tunnel.Mode()
 
@@ -61,8 +90,21 @@ func QueryProxyGroupNames(excludeNotSelectable bool) []string {
 		return []string{}
 	}
 
-	global := tunnel.Proxies()["GLOBAL"].(*adapter.Proxy).ProxyAdapter.(outboundgroup.ProxyGroup)
-	proxies := global.Providers()[0].Proxies()
+	global, err := globalGroup()
+	if err != nil {
+		log.Warnln("Query group names: %s", err.Error())
+
+		return []string{}
+	}
+
+	providers := global.Providers()
+	if len(providers) == 0 {
+		log.Warnln("Query group names: GLOBAL group has no provider")
+
+		return []string{}
+	}
+
+	proxies := providers[0].Proxies()
 	result := make([]string, 0, len(proxies)+1)
 
 	if mode == tunnel.Global {
@@ -70,14 +112,30 @@ func QueryProxyGroupNames(excludeNotSelectable bool) []string {
 	}
 
 	for _, p := range proxies {
-		if _, ok := p.(*adapter.Proxy).ProxyAdapter.(outboundgroup.ProxyGroup); ok {
-			if !excludeNotSelectable || p.Type() == C.Selector {
-				result = append(result, p.Name())
-			}
+		if !isProxyGroup(p) {
+			continue
+		}
+
+		if !excludeNotSelectable || p.Type() == C.Selector {
+			result = append(result, p.Name())
 		}
 	}
 
 	return result
+}
+
+// isProxyGroup reports whether p is a group the strategy list can drill into.
+// It tolerates a value that is not an *adapter.Proxy, because a group may hand
+// back an empty fallback that was never wrapped in one.
+func isProxyGroup(p C.Proxy) bool {
+	proxy, ok := p.(*adapter.Proxy)
+	if !ok {
+		return false
+	}
+
+	_, ok = proxy.ProxyAdapter.(outboundgroup.ProxyGroup)
+
+	return ok
 }
 
 func QueryProxyGroup(name string, sortMode SortMode, uiSubtitlePattern *regexp2.Regexp) *ProxyGroup {
@@ -89,7 +147,14 @@ func QueryProxyGroup(name string, sortMode SortMode, uiSubtitlePattern *regexp2.
 		return nil
 	}
 
-	g, ok := p.(*adapter.Proxy).ProxyAdapter.(outboundgroup.ProxyGroup)
+	proxy, ok := p.(*adapter.Proxy)
+	if !ok {
+		log.Warnln("Query group `%s`: is a %T, want *adapter.Proxy", name, p)
+
+		return nil
+	}
+
+	g, ok := proxy.ProxyAdapter.(outboundgroup.ProxyGroup)
 	if !ok {
 		log.Warnln("Query group `%s`: invalid type %s", name, p.Type().String())
 
@@ -172,7 +237,7 @@ func convertProxies(proxies []C.Proxy, uiSubtitlePattern *regexp2.Regexp) []*Pro
 		subtitle := p.Type().String()
 
 		if uiSubtitlePattern != nil {
-			if _, ok := p.(*adapter.Proxy).ProxyAdapter.(outboundgroup.ProxyGroup); !ok {
+			if !isProxyGroup(p) {
 				runes := []rune(name)
 				match, err := uiSubtitlePattern.FindRunesMatch(runes)
 				if err == nil && match != nil {
@@ -210,7 +275,7 @@ func collectProviders(providers []provider.ProxyProvider, uiSubtitlePattern *reg
 			subtitle := px.Type().String()
 
 			if uiSubtitlePattern != nil {
-				if _, ok := px.(*adapter.Proxy).ProxyAdapter.(outboundgroup.ProxyGroup); !ok {
+				if !isProxyGroup(px) {
 					runes := []rune(name)
 					match, err := uiSubtitlePattern.FindRunesMatch(runes)
 					if err == nil && match != nil {

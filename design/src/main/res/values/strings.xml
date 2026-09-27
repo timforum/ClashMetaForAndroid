@@ -1,4 +1,4 @@
-<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="PluralsCandidate">
+﻿<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="PluralsCandidate">
     <string name="launch_name">Clash Meta</string>
     <string name="application_name">Clash Meta for Android</string>
 
@@ -320,4 +320,43 @@
     <string name="force_dns_mapping">Force DNS Mapping</string>
     <string name="parse_pure_ip">Parse Pure IP</string>
     <string name="override_destination">Override Destination</string>
+    <string name="probtest">Screening</string>
+    <string name="probtest_summary">Periodically test candidate subscriptions and publish the nodes that still work</string>
+    <string name="probtest_enabled">Enable screening</string>
+    <string name="probtest_enabled_summary">Download the candidates on a schedule, keep only the nodes that pass every round and publish the result</string>
+    <string name="probtest_status">Round in progress</string>
+    <string name="probtest_downloading">Downloading candidate subscriptions</string>
+    <string name="probtest_progress_downloading">Downloading subscriptions %1$d/%2$d</string>
+    <string name="probtest_screening">Testing nodes</string>
+    <string name="probtest_progress_screening">Round %1$d/%2$d — %3$d alive, %4$d failed</string>
+    <string name="probtest_publishing">Publishing the surviving nodes</string>
+    <string name="probtest_sources">Candidate subscriptions</string>
+    <string name="probtest_include_imported">Test imported subscriptions</string>
+    <string name="probtest_include_imported_summary">Also screen every subscription already imported into this app</string>
+    <string name="probtest_candidates">Extra subscriptions</string>
+    <string name="probtest_candidates_summary">One URL per line</string>
+    <string name="probtest_schedule">Schedule</string>
+    <string name="probtest_interval">Interval in minutes</string>
+    <string name="probtest_interval_summary">30</string>
+    <string name="probtest_round_gap">Seconds between rounds</string>
+    <string name="probtest_round_gap_summary">20</string>
+    <string name="probtest_test_url">Test URL</string>
+    <string name="probtest_test_url_summary">Leave empty to use the default</string>
+    <string name="probtest_github">GitHub destination</string>
+    <string name="probtest_github_token">Token</string>
+    <string name="probtest_github_token_summary">A token with contents:write permission on the repository</string>
+    <string name="probtest_github_repo">Repository</string>
+    <string name="probtest_github_repo_summary">owner/name</string>
+    <string name="probtest_github_branch">Branch</string>
+    <string name="probtest_github_branch_summary">main</string>
+    <string name="probtest_github_path">File path</string>
+    <string name="probtest_github_path_summary">Path of the published configuration inside the repository</string>
+    <string name="probtest_service">Subscription service</string>
+    <string name="probtest_upload_url">Upload URL</string>
+    <string name="probtest_upload_url_summary">Endpoint that accepts the surviving nodes, e.g. https://example.workers.dev/internal/nodes. Must be https; cleartext http is upgraded automatically. Takes precedence over GitHub.</string>
+    <string name="probtest_upload_token">Upload token</string>
+    <string name="probtest_upload_token_summary">Sent as a bearer token. Leave empty when the endpoint needs no authentication</string>
+    <string name="probtest_actions">Actions</string>
+    <string name="probtest_run_now">Run a round now</string>
+    <string name="probtest_run_now_summary">Start screening immediately instead of waiting for the next round</string>
 </resources>

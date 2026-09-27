@@ -28,6 +28,28 @@ interface NullableTextAdapter<T> {
                 return text
             }
         }
+
+        /** Adapter for a non-nullable [String], where clearing the field means empty. */
+        val Text = object : NullableTextAdapter<String> {
+            override fun from(value: String): String {
+                return value
+            }
+
+            override fun to(text: String?): String {
+                return text.orEmpty()
+            }
+        }
+
+        /** Adapter for a non-nullable [Long] preference such as an interval in minutes. */
+        val Number = object : NullableTextAdapter<Long> {
+            override fun from(value: Long): String {
+                return if (value > 0) value.toString() else ""
+            }
+
+            override fun to(text: String?): Long {
+                return text?.toLongOrNull() ?: 0
+            }
+        }
     }
 }
 

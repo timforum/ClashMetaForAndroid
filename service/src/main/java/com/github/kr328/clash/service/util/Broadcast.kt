@@ -64,3 +64,44 @@ fun Context.sendClashStopped(reason: String?) {
         )
     )
 }
+
+/**
+ * Tells the UI process how far a screening round has come, so the settings
+ * screen can show progress instead of leaving the run invisible.
+ */
+fun Context.sendProbTestProgress(
+    stage: String,
+    done: Int,
+    total: Int,
+    round: Int,
+    rounds: Int,
+    passed: Int,
+    failed: Int,
+) {
+    val intent = Intent(Intents.ACTION_PROBTEST_PROGRESS)
+        .putExtra(Intents.EXTRA_STAGE, stage)
+        .putExtra(Intents.EXTRA_DONE, done)
+        .putExtra(Intents.EXTRA_TOTAL, total)
+        .putExtra(Intents.EXTRA_ROUND, round)
+        .putExtra(Intents.EXTRA_ROUNDS, rounds)
+        .putExtra(Intents.EXTRA_PASSED, passed)
+        .putExtra(Intents.EXTRA_FAILED, failed)
+
+    sendBroadcastSelf(intent)
+}
+
+/**
+ * Tells the UI how a screening round ended.
+ *
+ * The result rides on the same intent as the "stop showing progress" signal
+ * rather than in a follow-up broadcast, because a round that fails inside the
+ * first hundred milliseconds would otherwise leave the screen with no bar and
+ * no explanation of why. That is indistinguishable from a dead button.
+ */
+fun Context.sendProbTestFinished(published: Boolean, summary: String) {
+    val intent = Intent(Intents.ACTION_PROBTEST_FINISHED)
+        .putExtra(Intents.EXTRA_PUBLISHED, published)
+        .putExtra(Intents.EXTRA_SUMMARY, summary)
+
+    sendBroadcastSelf(intent)
+}

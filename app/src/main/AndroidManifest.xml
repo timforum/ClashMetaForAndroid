@@ -154,6 +154,11 @@
             android:exported="false"
             android:label="@string/meta_features" />
         <activity
+            android:name=".ProbTestSettingsActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/probtest" />
+        <activity
             android:name=".AccessControlActivity"
             android:configChanges="uiMode"
             android:exported="false"

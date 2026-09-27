@@ -18,4 +18,14 @@
     <string name="provider_files">Provider Files</string>
     <string name="profile_updater">Profile Updater</string>
     <string name="profile_updating">Profile Updating</string>
+    <string name="probtest_worker">Subscription Screening</string>
+    <string name="probtest_running">Screening candidate subscriptions</string>
+    <string name="probtest_downloading">Downloading candidate subscriptions</string>
+    <string name="probtest_progress_downloading">Downloading subscriptions %1$d/%2$d</string>
+    <string name="probtest_screening">Testing nodes</string>
+    <string name="probtest_progress_screening">Round %1$d/%2$d — %3$d alive, %4$d failed</string>
+    <string name="probtest_publishing">Publishing the surviving nodes</string>
+    <string name="probtest_result">Subscription screening result</string>
+    <string name="probtest_success">Screening completed</string>
+    <string name="probtest_failure">Screening failed</string>
 </resources>
