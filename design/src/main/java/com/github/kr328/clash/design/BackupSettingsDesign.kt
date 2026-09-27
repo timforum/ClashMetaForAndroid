@@ -176,35 +176,42 @@ class BackupSettingsDesign(
             showResult(context.getString(R.string.backup_webdav_not_configured))
             return
         }
-        run(context.getString(R.string.backup_webdav_list)) {
-            val files = manager.listWebdav()
-            if (files.isEmpty()) {
-                context.getString(R.string.backup_records_empty)
-            } else {
-                AlertDialog.Builder(context)
-                    .setTitle(R.string.backup_webdav_list)
-                    .setItems(
-                        files.map { it.name }.toTypedArray()
-                    ) { _, which ->
-                        val f = files[which]
-                        launch {
-                            showWorking(f.name)
-                            runCatching {
-                                withContext(Dispatchers.IO) { manager.downloadFromWebdav(f.name) }
-                            }.fold(
-                                onSuccess = {
-                                    showResult(context.getString(R.string.backup_uploaded, f.name))
-                                },
-                                onFailure = {
-                                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+        showWorking(context.getString(R.string.backup_webdav_list))
+        launch {
+            val files = runCatching { withContext(Dispatchers.IO) { manager.listWebdav() } }
+            files.fold(
+                onSuccess = { list ->
+                    if (list.isEmpty()) {
+                        showResult(context.getString(R.string.backup_records_empty))
+                    } else {
+                        AlertDialog.Builder(context)
+                            .setTitle(R.string.backup_webdav_list)
+                            .setItems(
+                                list.map { it.name }.toTypedArray()
+                            ) { _, which ->
+                                val f = list[which]
+                                launch {
+                                    showWorking(f.name)
+                                    runCatching {
+                                        withContext(Dispatchers.IO) { manager.downloadFromWebdav(f.name) }
+                                    }.fold(
+                                        onSuccess = {
+                                            showResult(context.getString(R.string.backup_restored, 1))
+                                        },
+                                        onFailure = {
+                                            showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                                        }
+                                    )
                                 }
-                            )
-                        }
+                            }
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show()
                     }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-                null
-            }
+                },
+                onFailure = {
+                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                },
+            )
         }
     }
 
