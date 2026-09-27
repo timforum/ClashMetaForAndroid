@@ -14,6 +14,7 @@ data class Proxy(
     val delay: Int,
 ) : Parcelable {
     @Suppress("unused")
+    @Serializable(with = TypeSerializer::class)
     enum class Type(val group: Boolean) {
         Direct(false),
         Reject(false),
@@ -34,6 +35,26 @@ data class Proxy(
         Tuic(false),
         WireGuard(false),
 
+        // Added by the mihomo upgrade. The core learned these protocol names,
+        // and every one of them used to arrive here as a string this enum had
+        // no entry for, which failed the whole deserialization.
+        Ssh(false),
+        Mieru(false),
+        AnyTLS(false),
+        Sudoku(false),
+        Masque(false),
+        TrustTunnel(false),
+        ShadowQuic(false),
+        OpenVPN(false),
+        Tailscale(false),
+        ZeroTier(false),
+        EasyTier(false),
+        GostRelay(false),
+
+        // Never selectable, but the core can still name them.
+        PassRule(false),
+        Rematch(false),
+        Dns(false),
 
         Relay(true),
         Selector(true),
@@ -42,6 +63,10 @@ data class Proxy(
         LoadBalance(true),
 
         Unknown(false);
+
+        companion object {
+            fun fromNameOrNull(name: String): Type? = values().firstOrNull { it.name == name }
+        }
     }
 
     override fun writeToParcel(parcel: Parcel, flags: Int) {
