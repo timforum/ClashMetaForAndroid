@@ -24,6 +24,7 @@ var processors = []processor{
 	patchDns,
 	patchTun,
 	patchListeners,
+	patchProxyGroups,
 	patchProviders,
 	validConfig,
 }
@@ -103,6 +104,25 @@ func patchListeners(cfg *config.RawConfig, _ string) error {
 		newListeners = append(newListeners, mapping)
 	}
 	cfg.Listeners = newListeners
+	return nil
+}
+
+// mihomo removed `type: relay` groups upstream: ParseProxyGroup fails the
+// whole load with "please using dialer-proxy instead". Downgrade such groups
+// to a selector so their name keeps resolving for the rules, other groups,
+// dialer-proxy chains and tunnels that reference it — dropping the group
+// outright would cascade into fatal "proxy [X] not found" errors elsewhere.
+// Chain behavior is lost, but the profile loads.
+func patchProxyGroups(cfg *config.RawConfig, _ string) error {
+	for _, group := range cfg.ProxyGroup {
+		groupType, _ := group["type"].(string)
+		if groupType != "relay" {
+			continue
+		}
+		name, _ := group["name"].(string)
+		group["type"] = "select"
+		log.Warnln("proxy group [%s]: relay was removed in mihomo, downgraded to select (chain behavior lost)", name)
+	}
 	return nil
 }
 
