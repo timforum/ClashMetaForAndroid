@@ -183,31 +183,124 @@ class BackupManager(private val context: Context) {
         return conn
     }
 
+    /**
+     * Opens the request and carries it across up to five redirects by hand.
+     *
+     * HttpURLConnection will not follow a 3xx for PUT or PROPFIND — and when
+     * it does follow one it can downgrade the method to GET, which answers
+     * 200 without writing anything. That is exactly how an upload can report
+     * success while the server keeps no file, so redirect handling is done
+     * here with the original method and body preserved.
+     */
+    private fun openFollowingRedirects(
+        url: String,
+        method: String,
+        target: WebdavTarget,
+        body: ByteArray? = null,
+        depth: String? = null,
+    ): HttpURLConnection {
+        var current = url
+        var redirects = 0
+
+        while (true) {
+            val conn = openConnection(current, method, target)
+            conn.instanceFollowRedirects = false
+
+            if (depth != null) {
+                conn.setRequestProperty("Depth", depth)
+            }
+
+            if (body != null) {
+                if (method == "PROPFIND") {
+                    conn.setRequestProperty("Content-Type", "application/xml")
+                }
+                conn.doOutput = true
+                conn.outputStream.use { it.write(body) }
+            }
+
+            val code = conn.responseCode
+
+            if (code in 301..308 && code != 304 && code != 305) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+
+                if (location == null || ++redirects > 5) {
+                    error("WebDAV $method failed with HTTP $code at $current")
+                }
+
+                current = URL(URL(current), location).toString()
+                continue
+            }
+
+            return conn
+        }
+    }
+
     private fun join(base: String, path: String, file: String): String {
         val trimmedBase = base.trimEnd('/')
         return if (path.isEmpty()) "$trimmedBase/$file" else "$trimmedBase/$path/$file"
     }
 
-    /** Uploads a backup zip to the configured WebDAV server. */
+    /**
+     * Uploads a backup zip to the configured WebDAV server and then asks the
+     * server what it actually stores, so a success message always means the
+     * file is really there.
+     */
     suspend fun uploadToWebdav(file: File): String = withContext(Dispatchers.IO) {
         val target = configuredWebdav()
             ?: error("WebDAV is not configured")
         val url = join(target.url, target.path, file.name)
         val bytes = file.readBytes()
 
-        val conn = openConnection(url, "PUT", target)
-        conn.doOutput = true
-        conn.outputStream.use { it.write(bytes) }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val body = conn.errorStream?.bufferedReader()?.readText()?.take(300) ?: ""
-                error("WebDAV PUT failed with HTTP $code: $body")
-            }
-        } finally {
-            conn.disconnect()
+        putFile(url, target, bytes)
+
+        runCatching { propfindDepth0(url, target) }.onFailure {
+            error("PUT succeeded but ${file.name} is not visible on the server (${it.message})")
         }
+
         url
+    }
+
+    /**
+     * Sends the bytes, re-issuing the request after every redirect and
+     * creating the remote folder on a first 404/409 before trying again.
+     */
+    private fun putFile(url: String, target: WebdavTarget, bytes: ByteArray) {
+        var folderCreated = false
+
+        while (true) {
+            val conn = openFollowingRedirects(url, "PUT", target, body = bytes)
+            val code = conn.responseCode
+
+            if (code in 200..299) {
+                conn.disconnect()
+                return
+            }
+
+            val detail = conn.errorStream?.bufferedReader()?.readText()?.take(300) ?: ""
+            conn.disconnect()
+
+            // A folder typed by hand, or a freshly created remote, answers
+            // 404/409 to the PUT: make the collection once and retry.
+            if ((code == 404 || code == 409) && !folderCreated && target.path.isNotEmpty()) {
+                folderCreated = true
+                mkcol(join(target.url, target.path, ""), target)
+                continue
+            }
+
+            error("WebDAV PUT failed with HTTP $code: $detail")
+        }
+    }
+
+    /** Best-effort folder creation; a real failure resurfaces on the retried PUT. */
+    private fun mkcol(url: String, target: WebdavTarget) {
+        try {
+            val conn = openFollowingRedirects(url, "MKCOL", target)
+            conn.responseCode
+            conn.disconnect()
+        } catch (e: Exception) {
+            Log.w("backup: mkcol failed", e)
+        }
     }
 
     /** Downloads a backup file from the WebDAV server into the local backups dir. */
@@ -255,11 +348,7 @@ class BackupManager(private val context: Context) {
         val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
             "<d:resourcetype/></d:prop></d:propfind>"
 
-        val conn = openConnection(url, "PROPFIND", target)
-        conn.setRequestProperty("Depth", "0")
-        conn.setRequestProperty("Content-Type", "application/xml")
-        conn.doOutput = true
-        conn.outputStream.use { it.write(body.toByteArray()) }
+        val conn = openFollowingRedirects(url, "PROPFIND", target, body = body.toByteArray(), depth = "0")
         try {
             val code = conn.responseCode
             if (code !in 200..299) {
@@ -286,11 +375,7 @@ class BackupManager(private val context: Context) {
         val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
             "<d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>"
 
-        val conn = openConnection(dirUrl, "PROPFIND", target)
-        conn.setRequestProperty("Depth", "1")
-        conn.setRequestProperty("Content-Type", "application/xml")
-        conn.doOutput = true
-        conn.outputStream.use { it.write(body.toByteArray()) }
+        val conn = openFollowingRedirects(dirUrl, "PROPFIND", target, body = body.toByteArray(), depth = "1")
         try {
             val code = conn.responseCode
             if (code !in 200..299) {

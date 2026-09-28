@@ -12,6 +12,13 @@ interface ClickablePreference : Preference {
     var title: CharSequence
 
     var icon: Drawable?
+
+    /**
+     * A small marker shown at the trailing edge of the row, e.g. the green
+     * tick left behind by a successful connection test. Null hides it.
+     */
+    var endIcon: Drawable?
+
     var summary: CharSequence?
 
     fun clicked(clicked: () -> Unit)
@@ -32,6 +39,12 @@ fun PreferenceScreen.clickable(
             set(value) {
                 binding.iconView.background = value
                 binding.iconView.visibility = if (value == null) View.GONE else View.VISIBLE
+            }
+        override var endIcon: Drawable?
+            get() = binding.endView.drawable
+            set(value) {
+                binding.endView.setImageDrawable(value)
+                binding.endView.visibility = if (value == null) View.GONE else View.VISIBLE
             }
         override var title: CharSequence
             get() = binding.titleView.text

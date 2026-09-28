@@ -73,6 +73,9 @@ class BackupSettingsActivity : BaseActivity<BackupSettingsDesign>() {
                             BackupSettingsDesign.Request.WebdavList -> {
                                 design?.webdavList()
                             }
+                            BackupSettingsDesign.Request.WebdavRestore -> {
+                                design?.webdavRestore()
+                            }
                             else -> Unit
                         }
                     }.onFailure { e ->

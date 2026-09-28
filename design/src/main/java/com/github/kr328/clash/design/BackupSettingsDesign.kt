@@ -5,9 +5,11 @@ import android.content.Context
 import android.net.Uri
 import android.view.View
 import androidx.appcompat.app.AlertDialog
+import com.github.kr328.clash.common.compat.getDrawableCompat
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.design.databinding.DesignSettingsCommonBinding
 import com.github.kr328.clash.design.preference.*
+import com.github.kr328.clash.design.ui.ToastDuration
 import com.github.kr328.clash.design.util.applyFrom
 import com.github.kr328.clash.design.util.bindAppBarElevation
 import com.github.kr328.clash.design.util.layoutInflater
@@ -29,7 +31,7 @@ class BackupSettingsDesign(
 
     enum class Request {
         ExportFile, ImportFile, ViewLocalRecords,
-        WebdavVerify, WebdavUpload, WebdavList,
+        WebdavVerify, WebdavUpload, WebdavList, WebdavRestore,
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -39,6 +41,8 @@ class BackupSettingsDesign(
         get() = binding.root
 
     private lateinit var indicator: ProgressPreference
+
+    private lateinit var verifyRow: ClickablePreference
 
     fun showWorking(message: String) {
         indicator.view.visibility = View.VISIBLE
@@ -50,6 +54,11 @@ class BackupSettingsDesign(
         indicator.view.visibility = View.VISIBLE
         indicator.title = context.getText(R.string.backup_status)
         indicator.setMessage(message)
+
+        // The status row sits at the top of a long page, so a result would be
+        // off-screen exactly when the action was triggered down in the WebDAV
+        // section. Mirror every outcome through a snackbar at the bottom.
+        launch { showToast(message, ToastDuration.Long) }
     }
 
     fun hideIndicator() {
@@ -159,7 +168,8 @@ class BackupSettingsDesign(
     /**
      * Checks the configured server without moving any file: a Depth 0 PROPFIND
      * at the base URL proves the address and credentials, and a second one at
-     * the configured folder proves the remote path.
+     * the configured folder proves the remote path. A pass leaves a green tick
+     * at the end of the row; starting a new test clears the old one.
      */
     fun verifyWebdav() {
         Log.i("backup: webdav verify requested")
@@ -169,9 +179,23 @@ class BackupSettingsDesign(
             return
         }
 
-        run(context.getString(R.string.backup_webdav_verify)) {
-            manager.verifyWebdav()
-            context.getString(R.string.backup_webdav_ok)
+        verifyRow.endIcon = null
+        showWorking(context.getString(R.string.backup_webdav_verify))
+
+        launch(Dispatchers.Main) {
+            val result = runCatching { withContext(Dispatchers.IO) { manager.verifyWebdav() } }
+            result.fold(
+                onSuccess = {
+                    Log.i("backup: webdav verify ok")
+                    verifyRow.endIcon =
+                        context.getDrawableCompat(R.drawable.ic_baseline_check_circle_green)
+                    showResult(context.getString(R.string.backup_webdav_ok))
+                },
+                onFailure = {
+                    Log.w("backup: webdav verify failed", it)
+                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                },
+            )
         }
     }
 
@@ -203,6 +227,11 @@ class BackupSettingsDesign(
         }
     }
 
+    /**
+     * Browses what is on the server: a read-only listing with sizes. Restoring
+     * is a separate action so that looking at the server can never replace the
+     * live configuration by accident.
+     */
     fun webdavList() {
         if (manager.configuredWebdav() == null) {
             showResult(context.getString(R.string.backup_webdav_not_configured))
@@ -210,8 +239,6 @@ class BackupSettingsDesign(
         }
         showWorking(context.getString(R.string.backup_webdav_list))
 
-        // Same reason as run(): staying on the main dispatcher is what keeps
-        // the result dialog and the indicator updates off the IO thread.
         launch(Dispatchers.Main) {
             val files = runCatching { withContext(Dispatchers.IO) { manager.listWebdav() } }
             files.fold(
@@ -221,22 +248,90 @@ class BackupSettingsDesign(
                     } else {
                         AlertDialog.Builder(context)
                             .setTitle(R.string.backup_webdav_list)
-                            .setItems(
-                                list.map { it.name }.toTypedArray()
-                            ) { _, which ->
+                            .setMessage(
+                                list.take(50).joinToString("\n") { "${it.name} (${it.size} B)" }
+                            )
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show()
+                    }
+                },
+                onFailure = {
+                    Log.w("backup: webdav list failed", it)
+                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                },
+            )
+        }
+    }
+
+    /**
+     * Restores straight from the server: pick a file, confirm the replacement,
+     * then download it and unpack it over the stores — the WebDAV counterpart
+     * of the local import flow.
+     */
+    fun webdavRestore() {
+        Log.i("backup: webdav restore requested")
+
+        if (manager.configuredWebdav() == null) {
+            showResult(context.getString(R.string.backup_webdav_not_configured))
+            return
+        }
+
+        showWorking(context.getString(R.string.backup_webdav_restore))
+
+        launch(Dispatchers.Main) {
+            val files = runCatching { withContext(Dispatchers.IO) { manager.listWebdav() } }
+            files.fold(
+                onSuccess = { list ->
+                    if (list.isEmpty()) {
+                        showResult(context.getString(R.string.backup_records_empty))
+                    } else {
+                        AlertDialog.Builder(context)
+                            .setTitle(R.string.backup_webdav_restore)
+                            .setItems(list.map { it.name }.toTypedArray()) { _, which ->
                                 val f = list[which]
-                                launch {
-                                    showWorking(f.name)
-                                    runCatching {
-                                        withContext(Dispatchers.IO) { manager.downloadFromWebdav(f.name) }
-                                    }.fold(
-                                        onSuccess = {
-                                            showResult(context.getString(R.string.backup_restored, 1))
-                                        },
-                                        onFailure = {
-                                            showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+
+                                confirmRestore {
+                                    launch(Dispatchers.Main) {
+                                        showWorking(f.name)
+
+                                        val restored = runCatching {
+                                            val file = withContext(Dispatchers.IO) {
+                                                manager.downloadFromWebdav(f.name)
+                                            }
+                                            val count = manager.restoreBackup(file)
+
+                                            withContext(Dispatchers.IO) {
+                                                BackupRecordStore.add(
+                                                    context,
+                                                    BackupRecord(
+                                                        time = System.currentTimeMillis(),
+                                                        action = BackupRecord.ACTION_RESTORE,
+                                                        target = BackupRecord.webdavTarget(f.name),
+                                                        fileName = f.name,
+                                                        sizeBytes = file.length(),
+                                                        ok = true,
+                                                    )
+                                                )
+                                            }
+
+                                            count
                                         }
-                                    )
+
+                                        restored.fold(
+                                            onSuccess = {
+                                                showResult(context.getString(R.string.backup_restored, it))
+                                            },
+                                            onFailure = {
+                                                Log.w("backup: webdav restore failed", it)
+                                                showResult(
+                                                    context.getString(
+                                                        R.string.backup_failed,
+                                                        it.message ?: it.toString(),
+                                                    )
+                                                )
+                                            },
+                                        )
+                                    }
                                 }
                             }
                             .setNegativeButton(android.R.string.cancel, null)
@@ -244,6 +339,7 @@ class BackupSettingsDesign(
                     }
                 },
                 onFailure = {
+                    Log.w("backup: webdav restore list failed", it)
                     showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
                 },
             )
@@ -324,7 +420,7 @@ class BackupSettingsDesign(
                 placeholder = R.string.backup_webdav_path_summary,
             )
 
-            clickable(
+            verifyRow = clickable(
                 title = R.string.backup_webdav_verify,
                 icon = R.drawable.ic_outline_check_circle,
                 summary = R.string.backup_webdav_verify_summary,
@@ -346,6 +442,14 @@ class BackupSettingsDesign(
                 summary = R.string.backup_webdav_list_summary,
             ) {
                 clicked { requests.trySend(Request.WebdavList) }
+            }
+
+            clickable(
+                title = R.string.backup_webdav_restore,
+                icon = R.drawable.ic_baseline_restore,
+                summary = R.string.backup_webdav_restore_summary,
+            ) {
+                clicked { requests.trySend(Request.WebdavRestore) }
             }
         }
 

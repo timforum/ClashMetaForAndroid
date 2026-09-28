@@ -450,5 +450,7 @@
     <string name="backup_webdav_verify">Test connection</string>
     <string name="backup_webdav_verify_summary">Check the server address, credentials and remote folder</string>
     <string name="backup_webdav_ok">Connection successful</string>
+    <string name="backup_webdav_restore">Restore from WebDAV</string>
+    <string name="backup_webdav_restore_summary">Download a backup file from the server and restore it</string>
     <string name="backup_confirm_restore">Restore this backup? Your current settings and profiles will be replaced.</string>
 </resources>
