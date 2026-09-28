@@ -8,15 +8,20 @@ import com.github.kr328.clash.service.util.importedDir
 import com.github.kr328.clash.service.util.pendingDir
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Base64
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -171,68 +176,78 @@ class BackupManager(private val context: Context) {
     private fun authHeader(username: String, password: String): String =
         "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray())
 
-    private fun openConnection(url: String, method: String, target: WebdavTarget): HttpURLConnection {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.requestMethod = method
-        conn.connectTimeout = 30_000
-        conn.readTimeout = 120_000
-        conn.instanceFollowRedirects = true
-        if (target.username.isNotEmpty()) {
-            conn.setRequestProperty("Authorization", authHeader(target.username, target.password))
-        }
-        return conn
+    private val davClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            // Redirects are carried by hand below so the method and body of
+            // PUT/PROPFIND survive them unchanged.
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
     }
 
     /**
-     * Opens the request and carries it across up to five redirects by hand.
+     * Sends one WebDAV request and carries it across up to five redirects.
      *
-     * HttpURLConnection will not follow a 3xx for PUT or PROPFIND — and when
-     * it does follow one it can downgrade the method to GET, which answers
-     * 200 without writing anything. That is exactly how an upload can report
-     * success while the server keeps no file, so redirect handling is done
-     * here with the original method and body preserved.
+     * OkHttp is used instead of HttpURLConnection because the platform class
+     * refuses PROPFIND and MKCOL outright with "Expected one of [OPTIONS, GET,
+     * HEAD, ...]" — the request would die before ever reaching the server.
+     * Redirects are followed manually because an automatic follow can downgrade
+     * a redirected PUT to GET, which answers 200 without writing anything:
+     * that is exactly how an upload can report success while the server keeps
+     * no file. The returned response must be closed by the caller.
      */
-    private fun openFollowingRedirects(
+    private fun execute(
         url: String,
         method: String,
         target: WebdavTarget,
         body: ByteArray? = null,
         depth: String? = null,
-    ): HttpURLConnection {
+    ): Response {
         var current = url
         var redirects = 0
 
         while (true) {
-            val conn = openConnection(current, method, target)
-            conn.instanceFollowRedirects = false
-
-            if (depth != null) {
-                conn.setRequestProperty("Depth", depth)
+            val mediaType = when {
+                method == "PROPFIND" -> "application/xml".toMediaType()
+                body != null -> "application/octet-stream".toMediaType()
+                else -> null
             }
 
-            if (body != null) {
-                if (method == "PROPFIND") {
-                    conn.setRequestProperty("Content-Type", "application/xml")
+            val request = Request.Builder()
+                .url(current)
+                .method(method, body?.toRequestBody(mediaType))
+                .apply {
+                    if (target.username.isNotEmpty()) {
+                        header("Authorization", authHeader(target.username, target.password))
+                    }
+                    if (depth != null) {
+                        header("Depth", depth)
+                    }
+                    if (method == "PROPFIND") {
+                        header("Content-Type", "application/xml")
+                    }
                 }
-                conn.doOutput = true
-                conn.outputStream.use { it.write(body) }
-            }
+                .build()
 
-            val code = conn.responseCode
+            val response = davClient.newCall(request).execute()
 
-            if (code in 301..308 && code != 304 && code != 305) {
-                val location = conn.getHeaderField("Location")
-                conn.disconnect()
+            if (response.code in 301..308 && response.code != 304 && response.code != 305) {
+                val location = response.header("Location")
+                val code = response.code
+                response.close()
 
                 if (location == null || ++redirects > 5) {
                     error("WebDAV $method failed with HTTP $code at $current")
                 }
 
-                current = URL(URL(current), location).toString()
+                current = current.toHttpUrl().resolve(location)?.toString()
+                    ?: error("WebDAV $method redirected to invalid location: $location")
                 continue
             }
 
-            return conn
+            return response
         }
     }
 
@@ -269,16 +284,16 @@ class BackupManager(private val context: Context) {
         var folderCreated = false
 
         while (true) {
-            val conn = openFollowingRedirects(url, "PUT", target, body = bytes)
-            val code = conn.responseCode
+            val response = execute(url, "PUT", target, body = bytes)
+            val code = response.code
 
             if (code in 200..299) {
-                conn.disconnect()
+                response.close()
                 return
             }
 
-            val detail = conn.errorStream?.bufferedReader()?.readText()?.take(300) ?: ""
-            conn.disconnect()
+            val detail = response.body?.string()?.take(300) ?: ""
+            response.close()
 
             // A folder typed by hand, or a freshly created remote, answers
             // 404/409 to the PUT: make the collection once and retry.
@@ -295,9 +310,7 @@ class BackupManager(private val context: Context) {
     /** Best-effort folder creation; a real failure resurfaces on the retried PUT. */
     private fun mkcol(url: String, target: WebdavTarget) {
         try {
-            val conn = openFollowingRedirects(url, "MKCOL", target)
-            conn.responseCode
-            conn.disconnect()
+            execute(url, "MKCOL", target).close()
         } catch (e: Exception) {
             Log.w("backup: mkcol failed", e)
         }
@@ -309,19 +322,16 @@ class BackupManager(private val context: Context) {
             ?: error("WebDAV is not configured")
         val url = join(target.url, target.path, remoteName)
 
-        val conn = openConnection(url, "GET", target)
-        conn.setRequestProperty("Depth", "0")
         val out = backupsDir.resolve(remoteName)
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                error("WebDAV GET failed with HTTP $code")
+        execute(url, "GET", target).use { response ->
+            if (response.code !in 200..299) {
+                error("WebDAV GET failed with HTTP ${response.code}")
             }
-            conn.inputStream.use { input ->
-                FileOutputStream(out).buffered().use { input.copyTo(it) }
+            val input = response.body?.byteStream()
+                ?: error("WebDAV GET returned no body")
+            input.use {
+                FileOutputStream(out).buffered().use { file -> it.copyTo(file) }
             }
-        } finally {
-            conn.disconnect()
         }
         out
     }
@@ -348,16 +358,13 @@ class BackupManager(private val context: Context) {
         val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
             "<d:resourcetype/></d:prop></d:propfind>"
 
-        val conn = openFollowingRedirects(url, "PROPFIND", target, body = body.toByteArray(), depth = "0")
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val detail = conn.errorStream?.bufferedReader()?.readText()?.take(300) ?: ""
-                error("WebDAV PROPFIND failed with HTTP $code: $detail")
+        execute(url, "PROPFIND", target, body = body.toByteArray(), depth = "0")
+            .use { response ->
+                if (response.code !in 200..299) {
+                    val detail = response.body?.string()?.take(300) ?: ""
+                    error("WebDAV PROPFIND failed with HTTP ${response.code}: $detail")
+                }
             }
-        } finally {
-            conn.disconnect()
-        }
     }
 
     /**
@@ -375,42 +382,49 @@ class BackupManager(private val context: Context) {
         val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
             "<d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>"
 
-        val conn = openFollowingRedirects(dirUrl, "PROPFIND", target, body = body.toByteArray(), depth = "1")
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                error("WebDAV PROPFIND failed with HTTP $code")
+        execute(dirUrl, "PROPFIND", target, body = body.toByteArray(), depth = "1")
+            .use { response ->
+                if (response.code !in 200..299) {
+                    error("WebDAV PROPFIND failed with HTTP ${response.code}")
+                }
+                parsePropfind(response.body?.string() ?: "")
             }
-            parsePropfind(conn.inputStream.bufferedReader().readText())
-        } finally {
-            conn.disconnect()
-        }
     }
 
     private fun parsePropfind(xml: String): List<WebdavFile> {
         val files = mutableListOf<WebdavFile>()
-        val responseRe = Regex("<d:response>.*?</d:response>", RegexOption.DOT_MATCHES_ALL)
+        // Inline (?i)(?s): servers differ in namespace prefix case (d: vs D:)
+        // and pretty-print the multistatus across lines. Kotlin's Regex accepts
+        // only one constructor option, so the flags ride along in the pattern.
+        val responseRe = Regex("(?is)<d:response>.*?</d:response>")
         for (block in responseRe.findAll(xml)) {
             val text = block.value
-            val href = Regex("<d:href>(.*?)</d:href>").find(text)?.groupValues?.get(1) ?: continue
-            val length = Regex("<d:getcontentlength>(\\d+)</d:getcontentlength>").find(text)
-                ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
-            val isCollection = "<collection/>" in text
-            if (isCollection) continue
-            val name = decodeHref(href).takeLast(1)
+            val href = Regex("(?is)<d:href>(.*?)</d:href>")
+                .find(text)?.groupValues?.get(1) ?: continue
+            val length = Regex("(?i)<d:getcontentlength>(\\d+)</d:getcontentlength>")
+                .find(text)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            // Servers write the collection marker as <collection/>, <d:collection/>
+            // or <D:collection></D:collection>; all of them mean "skip this entry".
+            if (Regex("(?i)<(?:\\w+:)?collection").containsMatchIn(text)) continue
+            val name = decodeHref(href)
             if (name.isEmpty()) continue
             files += WebdavFile(name, length)
         }
         return files
     }
 
+    /**
+     * Turns a multistatus href into a plain file name: percent-decoding it,
+     * dropping any fragment, and keeping only what follows the last slash so
+     * both path-style and full-URL hrefs work.
+     */
     private fun decodeHref(href: String): String {
         val decoded = try {
             java.net.URLDecoder.decode(href, "UTF-8")
         } catch (e: Exception) {
             href
         }
-        return decoded.substringAfterLast('#')
+        return decoded.substringAfterLast('#').trimEnd('/').substringAfterLast('/')
     }
 
     data class WebdavFile(val name: String, val size: Long)
