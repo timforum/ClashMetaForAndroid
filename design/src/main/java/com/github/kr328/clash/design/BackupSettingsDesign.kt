@@ -227,6 +227,8 @@ class BackupSettingsDesign(
                 view.visibility = View.GONE
             }
 
+            tips(R.string.backup_tips)
+
             category(R.string.backup_local)
 
             clickable(

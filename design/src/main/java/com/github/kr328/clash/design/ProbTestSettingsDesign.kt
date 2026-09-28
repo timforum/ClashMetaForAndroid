@@ -144,6 +144,8 @@ class ProbTestSettingsDesign(
                 view.visibility = View.GONE
             }
 
+            tips(R.string.probtest_tips)
+
             category(R.string.probtest_sources)
 
             switch(

@@ -413,8 +413,10 @@
     <string name="probtest_running">Screening candidate subscriptions</string>
     <string name="probtest_success">Screening completed</string>
     <string name="probtest_failure">Screening failed</string>
+    <string name="probtest_tips">Every round downloads the candidates, tests each node against the test URL, and republishes only the survivors.</string>
     <string name="backup">Backup &amp; Restore</string>
     <string name="backup_summary">Export all settings and profiles to a file, or sync them to a WebDAV server</string>
+    <string name="backup_tips">A backup covers settings, screening options, WebDAV credentials, and every profile. Restoring replaces the current configuration entirely.</string>
     <string name="backup_local">Local backup</string>
     <string name="backup_local_summary">Create a backup inside this app\'s data directory</string>
     <string name="backup_export">Backup to file…</string>
