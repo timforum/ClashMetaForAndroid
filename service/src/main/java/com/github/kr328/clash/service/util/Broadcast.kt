@@ -64,3 +64,32 @@ fun Context.sendClashStopped(reason: String?) {
         )
     )
 }
+
+fun Context.sendProbTestProgress(
+    stage: String,
+    done: Int,
+    total: Int,
+    round: Int,
+    rounds: Int,
+    passed: Int,
+    failed: Int,
+) {
+    val intent = Intent(Intents.ACTION_PROBTEST_PROGRESS)
+        .putExtra(Intents.EXTRA_STAGE, stage)
+        .putExtra(Intents.EXTRA_DONE, done)
+        .putExtra(Intents.EXTRA_TOTAL, total)
+        .putExtra(Intents.EXTRA_ROUND, round)
+        .putExtra(Intents.EXTRA_ROUNDS, rounds)
+        .putExtra(Intents.EXTRA_PASSED, passed)
+        .putExtra(Intents.EXTRA_FAILED, failed)
+
+    sendBroadcastSelf(intent)
+}
+
+fun Context.sendProbTestFinished(published: Boolean, summary: String) {
+    val intent = Intent(Intents.ACTION_PROBTEST_FINISHED)
+        .putExtra(Intents.EXTRA_PUBLISHED, published)
+        .putExtra(Intents.EXTRA_SUMMARY, summary)
+
+    sendBroadcastSelf(intent)
+}

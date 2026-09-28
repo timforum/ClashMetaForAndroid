@@ -1,11 +1,14 @@
 package com.github.kr328.clash.core
 
+import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.core.bridge.*
 import com.github.kr328.clash.core.model.*
 import com.github.kr328.clash.core.util.parseInetSocketAddress
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -23,6 +26,12 @@ object Clash {
         ignoreUnknownKeys = true
         encodeDefaults = false
     }
+
+    private val ProbTestJson = Json {
+        ignoreUnknownKeys = true
+    }
+
+    private val StringListSerializer = ListSerializer(String.serializer())
 
     fun reset() {
         Bridge.nativeReset()
@@ -169,6 +178,45 @@ object Clash {
         return CompletableDeferred<Unit>().apply {
             Bridge.nativeLoad(this, path.absolutePath)
         }
+    }
+
+    /**
+     * Probe candidate subscriptions and keep only the nodes that passed every round.
+     *
+     * The candidates are merged natively before probing: their `proxies` lists are
+     * concatenated, colliding names are renamed so nothing is lost, and the first
+     * candidate that carries `proxy-groups`/`rules` supplies the routing skeleton of
+     * the published configuration.
+     *
+     * Proxies are constructed through `adapter.ParseProxy` and `hub/executor` is
+     * never called, so the live core is never reconfigured and the currently running
+     * proxy is untouched for the whole run. The call blocks inside the core for
+     * [ProbTestOptions.rounds] rounds spaced [ProbTestOptions.roundGapMs] apart, which
+     * is why it is dispatched to [Dispatchers.IO] rather than allowed to stall the
+     * caller. [onProgress] receives one event per round.
+     */
+    suspend fun probTest(
+        candidates: List<String>,
+        options: ProbTestOptions = ProbTestOptions(),
+        onProgress: (ProbTestProgress) -> Unit = {}
+    ): ProbTestEnvelope = withContext(Dispatchers.IO) {
+        val json = Bridge.nativeProbTest(
+            object : FetchCallback {
+                override fun report(statusJson: String) {
+                    try {
+                        onProgress(ProbTestJson.decodeFromString(ProbTestProgress.serializer(), statusJson))
+                    } catch (e: Exception) {
+                        Log.w("Invalid probtest progress", e)
+                    }
+                }
+
+                override fun complete(error: String?) = Unit
+            },
+            ProbTestJson.encodeToString(StringListSerializer, candidates),
+            ProbTestJson.encodeToString(ProbTestOptions.serializer(), options)
+        )
+
+        ProbTestJson.decodeFromString(ProbTestEnvelope.serializer(), json)
     }
 
     fun queryProviders(): List<Provider> {

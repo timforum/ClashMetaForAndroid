@@ -238,6 +238,22 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeFetchAndValid(JNIEnv *env, 
     fetchAndValid(_completable, _path, _url, force);
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeProbTest(JNIEnv *env, jobject thiz,
+                                                              jobject callback,
+                                                              jstring raw_yaml,
+                                                              jstring options) {
+    TRACE_METHOD();
+
+    jobject _callback = new_global(callback);
+    scoped_string _raw_yaml = get_string(raw_yaml);
+    scoped_string _options = get_string(options);
+
+    scoped_string response = runProbTest(_callback, _raw_yaml, _options);
+
+    return new_string(response);
+}
+
 JNIEXPORT void JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeSetAgeSecretKey(JNIEnv *env, jobject thiz,
                                                                       jstring key) {
