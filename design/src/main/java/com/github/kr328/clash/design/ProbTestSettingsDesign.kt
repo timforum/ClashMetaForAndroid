@@ -130,6 +130,7 @@ class ProbTestSettingsDesign(
         val screen = preferenceScreen(context) {
             switch(
                 value = srvStore::probtestEnabled,
+                icon = R.drawable.ic_baseline_search,
                 title = R.string.probtest_enabled,
                 summary = R.string.probtest_enabled_summary,
             ) {
@@ -150,6 +151,7 @@ class ProbTestSettingsDesign(
 
             switch(
                 value = srvStore::probtestIncludeImported,
+                icon = R.drawable.ic_outline_inbox,
                 title = R.string.probtest_include_imported,
                 summary = R.string.probtest_include_imported_summary,
                 configure = dependencies::add,
@@ -159,6 +161,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestCandidates,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_candidates,
+                icon = R.drawable.ic_baseline_view_list,
                 placeholder = R.string.probtest_candidates_summary,
                 configure = dependencies::add,
             )
@@ -169,6 +172,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestIntervalMinutes,
                 adapter = NullableTextAdapter.Number,
                 title = R.string.probtest_interval,
+                icon = R.drawable.ic_outline_update,
                 placeholder = R.string.probtest_interval_summary,
                 configure = dependencies::add,
             )
@@ -177,6 +181,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestRoundGapSeconds,
                 adapter = NullableTextAdapter.Number,
                 title = R.string.probtest_round_gap,
+                icon = R.drawable.ic_baseline_swap_vert,
                 placeholder = R.string.probtest_round_gap_summary,
                 configure = dependencies::add,
             )
@@ -185,6 +190,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestTestUrl,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_test_url,
+                icon = R.drawable.ic_baseline_flash_on,
                 placeholder = R.string.probtest_test_url_summary,
                 configure = dependencies::add,
             )
@@ -195,6 +201,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestGitHubToken,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_github_token,
+                icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.probtest_github_token_summary,
                 configure = dependencies::add,
             )
@@ -203,6 +210,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestGitHubRepo,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_github_repo,
+                icon = R.drawable.ic_outline_article,
                 placeholder = R.string.probtest_github_repo_summary,
                 configure = dependencies::add,
             )
@@ -211,6 +219,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestGitHubBranch,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_github_branch,
+                icon = R.drawable.ic_outline_label,
                 placeholder = R.string.probtest_github_branch_summary,
                 configure = dependencies::add,
             )
@@ -219,6 +228,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestGitHubPath,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_github_path,
+                icon = R.drawable.ic_outline_folder,
                 placeholder = R.string.probtest_github_path_summary,
                 configure = dependencies::add,
             )
@@ -229,6 +239,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestUploadUrl,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_upload_url,
+                icon = R.drawable.ic_baseline_publish,
                 placeholder = R.string.probtest_upload_url_summary,
                 configure = dependencies::add,
             )
@@ -237,6 +248,7 @@ class ProbTestSettingsDesign(
                 value = srvStore::probtestUploadToken,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.probtest_upload_token,
+                icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.probtest_upload_token_summary,
                 configure = dependencies::add,
             )
@@ -245,6 +257,7 @@ class ProbTestSettingsDesign(
 
             clickable(
                 title = R.string.probtest_run_now,
+                icon = R.drawable.ic_baseline_replay,
                 summary = R.string.probtest_run_now_summary,
             ) {
                 clicked {
@@ -258,6 +271,8 @@ class ProbTestSettingsDesign(
                 // does not silently start the interval.
             }
         }
+
+        screen.shrinkText()
 
         binding.content.addView(screen.root)
 

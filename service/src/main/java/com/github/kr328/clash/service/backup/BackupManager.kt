@@ -234,6 +234,44 @@ class BackupManager(private val context: Context) {
     }
 
     /**
+     * Verifies the configured server without moving a file: a Depth 0 PROPFIND
+     * at the base URL proves the address and credentials, and a second one at
+     * the configured folder proves the remote path. Runs off the main thread.
+     */
+    suspend fun verifyWebdav() = withContext(Dispatchers.IO) {
+        val target = configuredWebdav()
+            ?: error("WebDAV is not configured")
+        val base = target.url.trimEnd('/') + "/"
+
+        propfindDepth0(base, target)
+
+        if (target.path.isNotEmpty()) {
+            propfindDepth0(base + target.path.trim('/') + "/", target)
+        }
+    }
+
+    /** Sends a Depth 0 PROPFIND and fails unless the server answers 2xx. */
+    private fun propfindDepth0(url: String, target: WebdavTarget) {
+        val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
+            "<d:resourcetype/></d:prop></d:propfind>"
+
+        val conn = openConnection(url, "PROPFIND", target)
+        conn.setRequestProperty("Depth", "0")
+        conn.setRequestProperty("Content-Type", "application/xml")
+        conn.doOutput = true
+        conn.outputStream.use { it.write(body.toByteArray()) }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val detail = conn.errorStream?.bufferedReader()?.readText()?.take(300) ?: ""
+                error("WebDAV PROPFIND failed with HTTP $code: $detail")
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
      * Lists the backup files on the WebDAV server by issuing a PROPFIND with
      * Depth 1 and parsing the returned multistatus XML. Only the simple
      * subset (href + getcontentlength) is understood, which every conforming

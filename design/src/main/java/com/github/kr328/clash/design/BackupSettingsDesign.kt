@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.view.View
 import androidx.appcompat.app.AlertDialog
+import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.design.databinding.DesignSettingsCommonBinding
 import com.github.kr328.clash.design.preference.*
 import com.github.kr328.clash.design.util.applyFrom
@@ -28,7 +29,7 @@ class BackupSettingsDesign(
 
     enum class Request {
         ExportFile, ImportFile, ViewLocalRecords,
-        WebdavUpload, WebdavList,
+        WebdavVerify, WebdavUpload, WebdavList,
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -57,11 +58,22 @@ class BackupSettingsDesign(
 
     private fun run(message: String, block: suspend () -> String?) {
         showWorking(message)
-        launch {
+
+        // The design scope is Unconfined, so a coroutine that comes back from
+        // withContext(IO) would keep executing on the IO thread — and touching
+        // the views from there is what threw the screen away after an upload.
+        // Pin the whole round trip (result included) to the main dispatcher.
+        launch(Dispatchers.Main) {
             val result = runCatching { withContext(Dispatchers.IO) { block() } }
             result.fold(
-                onSuccess = { showResult(it ?: context.getString(R.string.backup_status)) },
-                onFailure = { showResult(context.getString(R.string.backup_failed, it.message ?: it.toString())) },
+                onSuccess = {
+                    Log.i("backup: ${message} finished")
+                    showResult(it ?: context.getString(R.string.backup_status))
+                },
+                onFailure = {
+                    Log.w("backup: $message failed", it)
+                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                },
             )
         }
     }
@@ -144,7 +156,27 @@ class BackupSettingsDesign(
             .show()
     }
 
+    /**
+     * Checks the configured server without moving any file: a Depth 0 PROPFIND
+     * at the base URL proves the address and credentials, and a second one at
+     * the configured folder proves the remote path.
+     */
+    fun verifyWebdav() {
+        Log.i("backup: webdav verify requested")
+
+        if (manager.configuredWebdav() == null) {
+            showResult(context.getString(R.string.backup_webdav_not_configured))
+            return
+        }
+
+        run(context.getString(R.string.backup_webdav_verify)) {
+            manager.verifyWebdav()
+            context.getString(R.string.backup_webdav_ok)
+        }
+    }
+
     fun webdavUpload() {
+        Log.i("backup: webdav upload requested")
         if (manager.configuredWebdav() == null) {
             showResult(context.getString(R.string.backup_webdav_not_configured))
             return
@@ -177,7 +209,10 @@ class BackupSettingsDesign(
             return
         }
         showWorking(context.getString(R.string.backup_webdav_list))
-        launch {
+
+        // Same reason as run(): staying on the main dispatcher is what keeps
+        // the result dialog and the indicator updates off the IO thread.
+        launch(Dispatchers.Main) {
             val files = runCatching { withContext(Dispatchers.IO) { manager.listWebdav() } }
             files.fold(
                 onSuccess = { list ->
@@ -233,6 +268,7 @@ class BackupSettingsDesign(
 
             clickable(
                 title = R.string.backup_export,
+                icon = R.drawable.ic_baseline_save,
                 summary = R.string.backup_export_summary,
             ) {
                 clicked { requests.trySend(Request.ExportFile) }
@@ -240,6 +276,7 @@ class BackupSettingsDesign(
 
             clickable(
                 title = R.string.backup_import,
+                icon = R.drawable.ic_baseline_restore,
                 summary = R.string.backup_import_summary,
             ) {
                 clicked { requests.trySend(Request.ImportFile) }
@@ -247,6 +284,7 @@ class BackupSettingsDesign(
 
             clickable(
                 title = R.string.backup_records,
+                icon = R.drawable.ic_baseline_view_list,
                 summary = R.string.backup_records_summary,
             ) {
                 clicked { showLocalRecords() }
@@ -258,6 +296,7 @@ class BackupSettingsDesign(
                 value = srvStore::webdavUrl,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.backup_webdav_url,
+                icon = R.drawable.ic_baseline_domain,
                 placeholder = R.string.backup_webdav_url_summary,
             )
 
@@ -265,6 +304,7 @@ class BackupSettingsDesign(
                 value = srvStore::webdavUsername,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.backup_webdav_username,
+                icon = R.drawable.ic_baseline_person,
                 placeholder = R.string.backup_webdav_username_summary,
             )
 
@@ -272,6 +312,7 @@ class BackupSettingsDesign(
                 value = srvStore::webdavPassword,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.backup_webdav_password,
+                icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.backup_webdav_password_summary,
             )
 
@@ -279,11 +320,21 @@ class BackupSettingsDesign(
                 value = srvStore::webdavPath,
                 adapter = NullableTextAdapter.Text,
                 title = R.string.backup_webdav_path,
+                icon = R.drawable.ic_outline_folder,
                 placeholder = R.string.backup_webdav_path_summary,
             )
 
             clickable(
+                title = R.string.backup_webdav_verify,
+                icon = R.drawable.ic_outline_check_circle,
+                summary = R.string.backup_webdav_verify_summary,
+            ) {
+                clicked { requests.trySend(Request.WebdavVerify) }
+            }
+
+            clickable(
                 title = R.string.backup_webdav_upload,
+                icon = R.drawable.ic_baseline_publish,
                 summary = R.string.backup_webdav_upload_summary,
             ) {
                 clicked { requests.trySend(Request.WebdavUpload) }
@@ -291,11 +342,14 @@ class BackupSettingsDesign(
 
             clickable(
                 title = R.string.backup_webdav_list,
+                icon = R.drawable.ic_outline_inbox,
                 summary = R.string.backup_webdav_list_summary,
             ) {
                 clicked { requests.trySend(Request.WebdavList) }
             }
         }
+
+        screen.shrinkText()
 
         binding.content.addView(screen.root)
     }
