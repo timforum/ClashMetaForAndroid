@@ -14,6 +14,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
+import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -204,7 +206,7 @@ class BackupManager(private val context: Context) {
         target: WebdavTarget,
         body: ByteArray? = null,
         depth: String? = null,
-    ): Response {
+    ): DavResponse {
         var current = url
         var redirects = 0
 
@@ -247,8 +249,25 @@ class BackupManager(private val context: Context) {
                 continue
             }
 
-            return response
+            return DavResponse(current, response)
         }
+    }
+
+    /**
+     * The response of one exchange together with the URL it finally reached.
+     *
+     * Redirects are carried by hand, so the last hop is generally not the URL
+     * we asked for: a server that moves `/dir/file` to `/dir/file/` or from
+     * http to https stores the file at the new address only. Anything that
+     * follows up on a request — the PROPFIND that proves an upload landed —
+     * has to ask the server about that final address, not the original one.
+     */
+    private class DavResponse(val url: String, private val delegate: Response) : Closeable {
+        val code: Int get() = delegate.code
+
+        val body: ResponseBody? get() = delegate.body
+
+        override fun close() = delegate.close()
     }
 
     private fun join(base: String, path: String, file: String): String {
@@ -267,20 +286,21 @@ class BackupManager(private val context: Context) {
         val url = join(target.url, target.path, file.name)
         val bytes = file.readBytes()
 
-        putFile(url, target, bytes)
+        val storedAt = putFile(url, target, bytes)
 
-        runCatching { propfindDepth0(url, target) }.onFailure {
+        runCatching { propfindDepth0(storedAt, target) }.onFailure {
             error("PUT succeeded but ${file.name} is not visible on the server (${it.message})")
         }
 
-        url
+        storedAt
     }
 
     /**
      * Sends the bytes, re-issuing the request after every redirect and
      * creating the remote folder on a first 404/409 before trying again.
+     * Returns the address the server finally kept the file at.
      */
-    private fun putFile(url: String, target: WebdavTarget, bytes: ByteArray) {
+    private fun putFile(url: String, target: WebdavTarget, bytes: ByteArray): String {
         var folderCreated = false
 
         while (true) {
@@ -288,8 +308,9 @@ class BackupManager(private val context: Context) {
             val code = response.code
 
             if (code in 200..299) {
+                val storedAt = response.url
                 response.close()
-                return
+                return storedAt
             }
 
             val detail = response.body?.string()?.take(300) ?: ""
@@ -353,18 +374,50 @@ class BackupManager(private val context: Context) {
         }
     }
 
-    /** Sends a Depth 0 PROPFIND and fails unless the server answers 2xx. */
+    /**
+     * Sends a Depth 0 PROPFIND and fails unless the server answers 2xx.
+     *
+     * The very first check after a write is a race the server usually loses:
+     * a backend that commits uploads asynchronously answers 404 for a moment,
+     * and a load balancer can route the follow-up to a node that has not seen
+     * the PUT yet. Both clear on their own, so the request is repeated a few
+     * times with a growing pause instead of failing a backup that did land.
+     * Answers that will not change on a retry — bad credentials, a server that
+     * does not speak WebDAV — are reported straight away.
+     */
     private fun propfindDepth0(url: String, target: WebdavTarget) {
         val body = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>" +
             "<d:resourcetype/></d:prop></d:propfind>"
 
-        execute(url, "PROPFIND", target, body = body.toByteArray(), depth = "0")
-            .use { response ->
-                if (response.code !in 200..299) {
-                    val detail = response.body?.string()?.take(300) ?: ""
-                    error("WebDAV PROPFIND failed with HTTP ${response.code}: $detail")
-                }
+        var lastError = "the request was never made"
+
+        for (attempt in 1..PROPFIND_ATTEMPTS) {
+            if (attempt > 1) {
+                val waitMs = PROPFIND_RETRY_DELAY_MS * (attempt - 1)
+                Log.i("backup: PROPFIND retry $attempt/$PROPFIND_ATTEMPTS in $waitMs ms")
+                Thread.sleep(waitMs)
             }
+
+            val failure: String? = try {
+                execute(url, "PROPFIND", target, body = body.toByteArray(), depth = "0").use { response ->
+                    if (response.code in 200..299) {
+                        null
+                    } else {
+                        val detail = response.body?.string()?.take(300) ?: ""
+                        "HTTP ${response.code}: $detail"
+                    }
+                }
+            } catch (e: Exception) {
+                e.message ?: e.toString()
+            }
+
+            if (failure == null) return
+
+            lastError = failure
+            if (PERMANENT_PROPFIND_FAILURE.containsMatchIn(failure)) break
+        }
+
+        error("WebDAV PROPFIND failed with $lastError")
     }
 
     /**
@@ -431,6 +484,16 @@ class BackupManager(private val context: Context) {
 
     companion object {
         private val PREFERENCE_FILES = listOf("service", "ui", "app", "tips")
+
+        // A freshly written file can need a moment before the server reports it
+        // back; three attempts with a growing pause cover that without turning
+        // a genuinely unreachable server into a long wait.
+        private const val PROPFIND_ATTEMPTS = 3
+        private const val PROPFIND_RETRY_DELAY_MS = 1_000L
+
+        // Credentials and a missing WebDAV implementation are answers rather
+        // than races: repeating them only delays the same failure.
+        private val PERMANENT_PROPFIND_FAILURE = Regex("HTTP (401|403|405)")
 
         private fun timestamp(): String =
             SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
