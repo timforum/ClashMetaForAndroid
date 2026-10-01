@@ -1,6 +1,7 @@
 ﻿package com.github.kr328.clash.service.probtest
 
 import android.content.Context
+import android.net.Uri
 import android.util.Base64
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.core.Clash
@@ -283,6 +284,17 @@ class ProbTestPipeline(private val context: Context) {
             }
         }
 
+        // A file the user picked from the phone, one URL per line, is the
+        // on-device counterpart of the inline list above: it keeps the worker
+        // from hard-coding every source and lets the pool grow without a new
+        // build.
+        for (line in readExtraSubFile(store.probtestExtraSubFile)) {
+            val url = line.trim()
+            if (url.isNotEmpty() && seen.add(url)) {
+                candidates += ProbTestCandidate(url, url)
+            }
+        }
+
         if (store.probtestIncludeImported) {
             for (profile in ImportedDao().queryAll()) {
                 if (profile.type == Profile.Type.Url && profile.source.isNotBlank() &&
@@ -294,6 +306,32 @@ class ProbTestPipeline(private val context: Context) {
         }
 
         return candidates
+    }
+
+    /**
+     * Reads the picked file and returns its non-empty lines. A missing,
+     * unreadable or permissioned file contributes nothing rather than failing
+     * the whole round, so a stale reference after the file was deleted is just
+     * skipped.
+     */
+    private suspend fun readExtraSubFile(uriString: String): List<String> {
+        if (uriString.isBlank()) return emptyList()
+
+        return try {
+            val uri = Uri.parse(uriString)
+
+            withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readAtMost(MAX_CANDIDATE_BYTES)
+                        .toString(Charsets.UTF_8)
+                        .lineSequence()
+                        .toList()
+                } ?: emptyList()
+            }
+        } catch (e: Exception) {
+            Log.w("probtest: could not read extra subscription file $uriString", e)
+            emptyList()
+        }
     }
 
     private suspend fun fetch(url: String): String? {

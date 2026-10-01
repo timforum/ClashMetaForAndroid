@@ -90,6 +90,15 @@ class ServiceStore(context: Context) {
         defaultValue = ""
     )
 
+    // A file on the phone (a content:// uri from the document picker) that
+    // holds one subscription URL per line, the counterpart of the inline
+    // candidates list. Stored as a string so the worker can read it back across
+    // processes. Empty means no file is attached.
+    var probtestExtraSubFile by store.string(
+        key = "probtest_extra_sub_file",
+        defaultValue = ""
+    )
+
     // The primary candidate subscription a round screens. Required; the probe
     // target itself always falls back to the core default (Cloudflare).
     var probtestTestUrl by store.string(

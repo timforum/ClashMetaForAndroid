@@ -1,6 +1,7 @@
 package com.github.kr328.clash.design
 
 import android.content.Context
+import android.net.Uri
 import android.view.View
 import com.github.kr328.clash.design.databinding.DesignSettingsCommonBinding
 import com.github.kr328.clash.design.preference.*
@@ -18,6 +19,7 @@ class ProbTestSettingsDesign(
 ) : Design<ProbTestSettingsDesign.Request>(context) {
     enum class Request {
         RunNow,
+        PickExtraSubFile,
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -118,6 +120,23 @@ class ProbTestSettingsDesign(
         }
     }
 
+    private lateinit var extraSubFileRow: ClickablePreference
+
+    /**
+     * Shows the file the user picked as the "Extra subscriptions" source, or
+     * the hint when none is set. The picker hands back a content uri, so the
+     * row reports the file name rather than the raw uri.
+     */
+    fun updateExtraSubFile(uri: String?) {
+        extraSubFileRow.summary = when {
+            uri.isNullOrBlank() -> context.getString(R.string.probtest_extra_sub_file_summary)
+            else -> {
+                val name = Uri.parse(uri).lastPathSegment ?: uri
+                context.getString(R.string.probtest_extra_sub_file_set, name)
+            }
+        }
+    }
+
     init {
         binding.surface = surface
 
@@ -178,6 +197,20 @@ class ProbTestSettingsDesign(
                 card = true,
                 configure = dependencies::add,
             )
+
+            extraSubFileRow = clickable(
+                title = R.string.probtest_extra_sub_file,
+                icon = R.drawable.ic_outline_folder,
+                card = true,
+                configure = {
+                    dependencies.add(this)
+                    clicked {
+                        requests.trySend(Request.PickExtraSubFile)
+                    }
+                },
+            )
+
+            updateExtraSubFile(srvStore.probtestExtraSubFile)
 
             category(R.string.probtest_schedule, card = true)
 

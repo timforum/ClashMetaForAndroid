@@ -388,6 +388,9 @@
     <string name="probtest_include_imported_summary">Also screen every subscription already imported into this app</string>
     <string name="probtest_candidates">Extra subscriptions</string>
     <string name="probtest_candidates_summary">One URL per line</string>
+    <string name="probtest_extra_sub_file">Extra subscriptions file</string>
+    <string name="probtest_extra_sub_file_summary">Tap to pick a file, one URL per line</string>
+    <string name="probtest_extra_sub_file_set">Using file: %1$s</string>
     <string name="probtest_schedule">Schedule</string>
     <string name="probtest_interval">Interval in minutes</string>
     <string name="probtest_interval_summary">30</string>

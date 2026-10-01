@@ -1,6 +1,7 @@
 package com.github.kr328.clash
 
 import android.content.Intent
+import androidx.activity.result.contract.ActivityResultContracts
 import com.github.kr328.clash.common.compat.startForegroundServiceCompat
 import com.github.kr328.clash.common.constants.Intents
 import com.github.kr328.clash.common.log.Log
@@ -57,6 +58,23 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
                                 Log.w("probtest: worker could not start", e)
 
                                 design?.showResult(false, e.message ?: "Worker could not start")
+                            }
+                        }
+                        ProbTestSettingsDesign.Request.PickExtraSubFile -> {
+                            // A plain text file of subscription URLs, one per line.
+                            // The content uri is stored as a string so the worker
+                            // process can read the file back across processes.
+                            val uri = startActivityForResult(
+                                ActivityResultContracts.OpenDocument(),
+                                arrayOf("text/*", "application/octet-stream", "*/*"),
+                            )
+                            if (uri != null) {
+                                ServiceStore(this@ProbTestSettingsActivity).probtestExtraSubFile = uri.toString()
+                                design?.let {
+                                    // Rebuild the screen so the row shows the new file name
+                                    // and the stored value is re-read from the store.
+                                    it.updateExtraSubFile(uri.toString())
+                                }
                             }
                         }
                     }
