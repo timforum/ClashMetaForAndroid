@@ -69,6 +69,21 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
                                 arrayOf("text/*", "application/octet-stream", "*/*"),
                             )
                             if (uri != null) {
+                                // The picker's read grant is temporary and dies with
+                                // the activity. The worker runs in the service
+                                // process and may start long after this screen is
+                                // gone, so persist the grant explicitly; without
+                                // it openInputStream() in the worker throws and
+                                // the file is silently skipped every round.
+                                runCatching {
+                                    contentResolver.takePersistableUriPermission(
+                                        uri,
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                                    )
+                                }.onFailure { e ->
+                                    Log.w("probtest: could not persist extra sub file uri $uri", e)
+                                }
+
                                 ServiceStore(this@ProbTestSettingsActivity).probtestExtraSubFile = uri.toString()
                                 design?.let {
                                     // Rebuild the screen so the row shows the new file name
