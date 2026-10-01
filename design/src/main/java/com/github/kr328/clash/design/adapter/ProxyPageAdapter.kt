@@ -55,6 +55,14 @@ class ProxyPageAdapter(
             .recyclerView.invalidateChildren()
     }
 
+    /** The grid showing [position]'s group, or null when that page is not bound. */
+    fun recyclerViewAt(position: Int): RecyclerView? {
+        val holder = parent?.findViewHolderForAdapterPosition(position)
+            as? ProxyPageFactory.Holder
+
+        return holder?.recyclerView
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ProxyPageFactory.Holder {
         val holder = factory.newInstance()
 

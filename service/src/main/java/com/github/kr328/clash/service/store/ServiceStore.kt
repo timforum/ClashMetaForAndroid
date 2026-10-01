@@ -90,7 +90,8 @@ class ServiceStore(context: Context) {
         defaultValue = ""
     )
 
-    // Empty falls back to gstatic generate_204.
+    // The primary candidate subscription a round screens. Required; the probe
+    // target itself always falls back to the core default (Cloudflare).
     var probtestTestUrl by store.string(
         key = "probtest_test_url",
         defaultValue = ""

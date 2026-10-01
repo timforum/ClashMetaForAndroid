@@ -2,8 +2,11 @@ package com.github.kr328.clash.design
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.view.KeyEvent
 import android.view.View
 import android.widget.Toast
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.github.kr328.clash.core.model.Proxy
 import com.github.kr328.clash.core.model.TunnelState
@@ -25,7 +28,7 @@ import kotlinx.coroutines.withContext
 class ProxyDesign(
     context: Context,
     overrideMode: TunnelState.Mode?,
-    groupNames: List<String>,
+    private val groupNames: List<String>,
     uiStore: UiStore,
 ) : Design<ProxyDesign.Request>(context) {
     sealed class Request {
@@ -87,6 +90,76 @@ class ProxyDesign(
         withContext(Dispatchers.Main) {
             Toast.makeText(context, R.string.mode_switch_tips, Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * Gives a remote's page keys something to do in the node list.
+     *
+     * A remote has no scrollbar to drag and no gesture to make, so without
+     * this a long group could only be walked one focus step at a time. Keys
+     * the window ignores still click, which reads to the user as a broken
+     * button, so only a key that can actually page a list is swallowed here.
+     *
+     * Returns false for anything that is not a page key, or when there is no
+     * list to page through, so the caller can pass it down.
+     */
+    fun handlePageKey(keyCode: Int, down: Boolean): Boolean {
+        val step = when (keyCode) {
+            KeyEvent.KEYCODE_PAGE_DOWN -> 1
+            KeyEvent.KEYCODE_PAGE_UP -> -1
+            else -> return false
+        }
+
+        if (groupNames.isEmpty())
+            return false
+
+        val grid = (binding.pagesView.adapter as? ProxyPageAdapter)
+            ?.recyclerViewAt(binding.pagesView.currentItem) ?: return false
+
+        if (down)
+            scrollPage(grid, step)
+
+        return true
+    }
+
+    private fun scrollPage(grid: RecyclerView, step: Int) {
+        val lm = grid.layoutManager as? GridLayoutManager ?: return
+        val first = lm.findFirstVisibleItemPosition()
+        val last = lm.findLastVisibleItemPosition()
+
+        if (first == RecyclerView.NO_POSITION || first > last)
+            return
+
+        val page = grid.height - grid.paddingTop - grid.paddingBottom
+
+        // Three quarters of the viewport keeps one row of context, so the list
+        // reads as a jump rather than a teleport to unrelated nodes.
+        if (page > 0)
+            grid.scrollBy(0, (page * 3 / 4).coerceAtLeast(1) * step)
+
+        focusTopRow(grid, lm)
+    }
+
+    private fun focusTopRow(grid: RecyclerView, lm: GridLayoutManager) {
+        val last = lm.findLastVisibleItemPosition()
+
+        var position = lm.findFirstVisibleItemPosition()
+
+        if (position == RecyclerView.NO_POSITION)
+            return
+
+        // Park on the first row cut clean by the top edge; focusing a partial
+        // row would have the grid snap it into place and undo part of the jump.
+        while (position < last) {
+            val child = lm.findViewByPosition(position) ?: break
+
+            if (child.top >= grid.paddingTop)
+                break
+
+            position++
+        }
+
+        lm.findViewByPosition(position)?.requestFocus()
     }
 
     init {

@@ -231,7 +231,9 @@ func TestRunFiltersAndExportsCompleteConfig(t *testing.T) {
 		}
 	}
 
-	// complete config: groups narrowed, dangling rule targets dropped, MATCH kept
+	// complete config: groups replaced by the fixed policy layout, source
+	// groups not published, and the source rules discarded in favour of the
+	// fixed list that ends in MATCH,Select
 	root, err := decodeRoot(res.YAML)
 	if err != nil {
 		t.Fatalf("re-decode: %v", err)
@@ -239,26 +241,45 @@ func TestRunFiltersAndExportsCompleteConfig(t *testing.T) {
 
 	groups := mustGroups(t, root)
 	names := map[string]bool{}
+	types := map[string]string{}
 	for _, g := range groups {
-		names[g["name"].(string)] = true
-	}
-	if names["ORPHAN"] {
-		t.Errorf("ORPHAN group should have been dropped: %v", groups)
-	}
-	if !names["PROXY"] || !names["NESTED"] {
-		t.Errorf("expected PROXY and NESTED to survive: %v", names)
+		name := g["name"].(string)
+		names[name] = true
+		types[name], _ = g["type"].(string)
 	}
 
-	rules := mustRules(t, root)
-	for _, r := range rules {
-		if _, _, ok := ruleTarget(r); ok {
-			if target, _, _ := ruleTarget(r); target == "ORPHAN" {
-				t.Errorf("rule %q references dropped group", r)
-			}
+	for _, gone := range []string{"ORPHAN", "PROXY", "NESTED"} {
+		if names[gone] {
+			t.Errorf("source group %q must not be published: %v", gone, names)
 		}
 	}
-	if !containsRule(rules, "MATCH,PROXY") {
-		t.Errorf("missing MATCH rule: %v", rules)
+	for _, want := range policyGroupNames {
+		if !names[want] {
+			t.Errorf("published config missing policy group %q: %v", want, names)
+		}
+	}
+	if types[policyAuto] != "url-test" {
+		t.Errorf("Auto group type = %q, want url-test: %v", types[policyAuto], types)
+	}
+	if types[policyLoad] != "load-balance" {
+		t.Errorf("LoadBalance group type = %q, want load-balance: %v", types[policyLoad], types)
+	}
+	if types[policyFallback] != "fallback" {
+		t.Errorf("Fallback group type = %q, want fallback: %v", types[policyFallback], types)
+	}
+	if types[policySelect] != "select" {
+		t.Errorf("Select group type = %q, want select: %v", types[policySelect], types)
+	}
+
+	// the rules are the fixed published list, verbatim, in order
+	rules := mustRules(t, root)
+	if len(rules) != len(publishedRules) {
+		t.Fatalf("rules = %d entries, want %d: %v", len(rules), len(publishedRules), rules)
+	}
+	for i, want := range publishedRules {
+		if rules[i] != want {
+			t.Errorf("rules[%d] = %q, want %q: %v", i, rules[i], want, rules)
+		}
 	}
 
 	// the published document must itself parse

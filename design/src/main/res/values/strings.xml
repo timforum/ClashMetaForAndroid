@@ -382,6 +382,8 @@
     <string name="probtest_progress_screening">Round %1$d/%2$d — %3$d alive, %4$d failed</string>
     <string name="probtest_publishing">Publishing the surviving nodes</string>
     <string name="probtest_sources">Candidate subscriptions</string>
+    <string name="probtest_primary_sub">Primary subscription</string>
+    <string name="probtest_primary_sub_summary">The subscription to screen. Required</string>
     <string name="probtest_include_imported">Test imported subscriptions</string>
     <string name="probtest_include_imported_summary">Also screen every subscription already imported into this app</string>
     <string name="probtest_candidates">Extra subscriptions</string>
@@ -391,8 +393,6 @@
     <string name="probtest_interval_summary">30</string>
     <string name="probtest_round_gap">Seconds between rounds</string>
     <string name="probtest_round_gap_summary">20</string>
-    <string name="probtest_test_url">Test URL</string>
-    <string name="probtest_test_url_summary">Leave empty to use the default</string>
     <string name="probtest_github">GitHub destination</string>
     <string name="probtest_github_token">Token</string>
     <string name="probtest_github_token_summary">A token with contents:write permission on the repository</string>
@@ -413,7 +413,7 @@
     <string name="probtest_running">Screening candidate subscriptions</string>
     <string name="probtest_success">Screening completed</string>
     <string name="probtest_failure">Screening failed</string>
-    <string name="probtest_tips">Every round downloads the candidates, tests each node against the test URL, and republishes only the survivors.</string>
+    <string name="probtest_tips">Every round downloads the candidates, tests each node against the probe URL, and republishes only the survivors.</string>
     <string name="backup">Backup &amp; Restore</string>
     <string name="backup_summary">Export all settings and profiles to a file, or sync them to a WebDAV server</string>
     <string name="backup_tips">A backup covers settings, screening options, WebDAV credentials, and every profile. Restoring replaces the current configuration entirely.</string>

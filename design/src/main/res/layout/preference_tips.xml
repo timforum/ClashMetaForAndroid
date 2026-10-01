@@ -1,23 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layout xmlns:android="http://schemas.android.com/apk/res/android">
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingVertical="@dimen/item_padding_vertical">
+        android:paddingVertical="@dimen/item_padding_vertical"
+        android:paddingEnd="@dimen/item_tailing_margin">
 
         <View
-            android:layout_width="@dimen/tips_icon_size"
-            android:layout_height="@dimen/tips_icon_size"
-            android:layout_marginHorizontal="@dimen/tips_icon_margin"
+            android:id="@+id/icon"
+            android:layout_width="@dimen/item_header_component_size"
+            android:layout_height="@dimen/item_header_component_size"
+            android:layout_marginHorizontal="@dimen/item_header_margin"
             android:background="@drawable/ic_outline_info" />
 
         <TextView
             android:id="@+id/tips"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="@dimen/item_tailing_margin"
+            android:layout_weight="1"
             android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
     </LinearLayout>
 </layout>

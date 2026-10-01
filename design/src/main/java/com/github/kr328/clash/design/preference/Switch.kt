@@ -12,7 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.reflect.KMutableProperty0
 
-interface SwitchPreference : Preference {
+interface SwitchPreference : Preference, CardPreference {
+    override var card: Boolean
     var icon: Drawable?
     var title: CharSequence?
     var summary: CharSequence?
@@ -24,12 +25,15 @@ fun PreferenceScreen.switch(
     @DrawableRes icon: Int? = null,
     @StringRes title: Int? = null,
     @StringRes summary: Int? = null,
+    card: Boolean = false,
     configure: SwitchPreference.() -> Unit = {},
 ): SwitchPreference {
     val binding = PreferenceSwitchBinding
         .inflate(context.layoutInflater, root, false)
 
     val impl = object : SwitchPreference {
+        override var card: Boolean = card
+
         override val view: View
             get() = binding.root
         override var icon: Drawable?

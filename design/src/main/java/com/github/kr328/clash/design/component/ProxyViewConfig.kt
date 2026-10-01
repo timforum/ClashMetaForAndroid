@@ -35,6 +35,18 @@ class ProxyViewConfig(val context: Context, var proxyLine: Int) {
         Color.blue(Color.DKGRAY),
     )
 
+    /**
+     * Width of the ring drawn around the node the remote is sitting on.
+     *
+     * A remote moves focus without ever touching the screen, and the stock
+     * ripple background only answers presses, so without a ring of its own
+     * the focus move is audible and nothing else.
+     */
+    val focusStrokeWidth = context.resources.displayMetrics.density * 2f
+
+    /** Wash tint laid under the focus ring so it reads on any theme. */
+    val focusFillAlpha = 0x1F
+
     val cardRadius = context.getPixels(R.dimen.proxy_card_radius).toFloat()
     var cardOffset = context.getPixels(R.dimen.proxy_card_offset).toFloat()
 }

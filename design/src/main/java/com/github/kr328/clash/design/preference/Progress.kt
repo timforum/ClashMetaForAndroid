@@ -12,7 +12,7 @@ import com.github.kr328.clash.design.util.layoutInflater
  * that cannot report a denominator still has to look alive rather than pinned
  * at zero.
  */
-interface ProgressPreference : Preference {
+interface ProgressPreference : Preference, CardPreference {
     var title: CharSequence
     var summary: CharSequence?
 
@@ -34,12 +34,15 @@ interface ProgressPreference : Preference {
 
 fun PreferenceScreen.progress(
     @StringRes title: Int,
+    card: Boolean = false,
     configure: ProgressPreference.() -> Unit = {},
 ): ProgressPreference {
     val binding = PreferenceProgressBinding
         .inflate(context.layoutInflater, root, false)
 
     val impl = object : ProgressPreference {
+        override var card: Boolean = card
+
         override var title: CharSequence
             get() = binding.titleView.text
             set(value) {

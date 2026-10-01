@@ -8,7 +8,7 @@ import com.github.kr328.clash.common.compat.getDrawableCompat
 import com.github.kr328.clash.design.databinding.PreferenceClickableBinding
 import com.github.kr328.clash.design.util.layoutInflater
 
-interface ClickablePreference : Preference {
+interface ClickablePreference : Preference, CardPreference {
     var title: CharSequence
 
     var icon: Drawable?
@@ -19,6 +19,13 @@ interface ClickablePreference : Preference {
      */
     var endIcon: Drawable?
 
+    /**
+     * Draws the row as a light rounded card with a gap to its neighbours
+     * instead of a flat full-width strip. Set by the [card] parameter of
+     * [clickable], or directly in a `configure` block.
+     */
+    override var card: Boolean
+
     var summary: CharSequence?
 
     fun clicked(clicked: () -> Unit)
@@ -28,12 +35,15 @@ fun PreferenceScreen.clickable(
     @StringRes title: Int,
     @DrawableRes icon: Int? = null,
     @StringRes summary: Int? = null,
-    configure: ClickablePreference.() -> Unit = {}
+    card: Boolean = false,
+    configure: ClickablePreference.() -> Unit = {},
 ): ClickablePreference {
     val binding = PreferenceClickableBinding
         .inflate(context.layoutInflater, root, false)
 
     val impl = object : ClickablePreference {
+        override var card: Boolean = card
+
         override var icon: Drawable?
             get() = binding.iconView.background
             set(value) {

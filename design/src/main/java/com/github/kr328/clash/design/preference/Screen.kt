@@ -39,6 +39,12 @@ fun CoroutineScope.preferenceScreen(
 
 fun PreferenceScreen.addElement(preference: Preference) {
     root.addView(preference.view, LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+
+    // After the view is attached, so the margins the card style sets survive:
+    // addView above installs a fresh set of LayoutParams.
+    if (preference is CardPreference && preference.card) {
+        preference.view.applyCardStyle()
+    }
 }
 
 /**

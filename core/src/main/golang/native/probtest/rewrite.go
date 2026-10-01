@@ -30,17 +30,12 @@ var publishedOnlyKeys = []string{
 }
 
 // rewrite builds a complete, loadable Clash configuration that keeps only the
-// surviving nodes. Group membership and rule targets are recomputed so no
-// reference points at a node that was removed.
+// surviving nodes.
+//
+// The group list and the rule targets are both rebuilt rather than inherited,
+// so the published configuration is one that routes the way the screening
+// intends no matter what the source subscription looked like.
 func rewrite(root map[string]any, keep map[string]struct{}) ([]byte, error) {
-	alive := make(map[string]bool, len(keep)+len(builtinTargets))
-	for name := range keep {
-		alive[name] = true
-	}
-	for name := range builtinTargets {
-		alive[name] = true
-	}
-
 	proxies, err := filterProxies(root["proxies"], keep)
 	if err != nil {
 		return nil, err
@@ -60,13 +55,23 @@ func rewrite(root map[string]any, keep map[string]struct{}) ([]byte, error) {
 		delete(out, k)
 	}
 
-	groups, firstGroup := rewriteGroups(root["proxy-groups"], alive, keep)
-	out["proxy-groups"] = groups
+	// Everything a published rule is allowed to point at. A rule naming
+	// anything else named a group in the source subscription, which is not
+	// being published, so it is redirected to Auto rather than left dangling.
+	allowed := make(map[string]bool, len(builtinTargets)+4)
+	for name := range builtinTargets {
+		allowed[name] = true
+	}
+	for _, name := range policyGroupNames {
+		allowed[name] = true
+	}
 
-	out["rules"] = rewriteRules(root["rules"], alive, firstGroup)
+	out["proxy-groups"] = policyGroups(keep)
+
+	out["rules"] = rewriteRules()
 
 	if subRules, ok := root["sub-rules"]; ok {
-		out["sub-rules"] = rewriteSubRules(subRules, alive)
+		out["sub-rules"] = rewriteSubRules(subRules, allowed)
 	}
 
 	return yaml.Marshal(out)
@@ -114,172 +119,128 @@ func filterProxies(raw any, keep map[string]struct{}) ([]any, error) {
 	return out, nil
 }
 
-type groupInfo struct {
-	entry   map[string]any
-	name    string
-	members []any
+// The published configuration always carries these four groups, in this order.
+//
+// A subscription's own groups are not published. They decide where its traffic
+// goes, and a panel is free to call a group "Auto" while making it a plain
+// select, or to point its rules at a group a reader never sees. Inheriting
+// that produces a feed where changing a group in the app appears to do nothing,
+// because the rules reach some other group entirely - which reads as a broken
+// app rather than as a subscription the reader does not control. A fixed
+// layout is the one thing every reader can reason about before opening it.
+const (
+	policyAuto       = "Auto"
+	policySelect     = "Select"
+	policyLoad       = "LoadBalance"
+	policyFallback   = "Fallback"
+	loadBalanceRound = "round-robin"
+)
+
+// policyGroupNames is the published layout, in the order it is written out.
+var policyGroupNames = []string{policyAuto, policySelect, policyLoad, policyFallback}
+
+// publishedRules is the fixed rule list of the published configuration.
+//
+// Select, not Auto, is where the rules send traffic: Select is the group the
+// reader actually moves in Clash Verge, so choosing Auto / LoadBalance /
+// Fallback there is what visibly decides where the connections go. Auto stays
+// in the configuration as the url-test group the other two probe against, but
+// the rules no longer bypass the reader's choice by matching onto it.
+var publishedRules = []string{
+	"GEOIP,CN,DIRECT",
+	"GEOIP,LAN,DIRECT",
+	"GEOIP,PRIVATE,DIRECT",
+	"DOMAIN-SUFFIX,youtube.com,Select",
+	"DOMAIN-SUFFIX,youtube-nocookie.com,Select",
+	"DOMAIN-SUFFIX,googlevideo.com,Select",
+	"DOMAIN-SUFFIX,ytimg.com,Select",
+	"DOMAIN-SUFFIX,gvt1.com,Select",
+	"DOMAIN-SUFFIX,gvt2.com,Select",
+	"MATCH,Select",
 }
 
-// rewriteGroups drops groups that lost every member, narrows the remaining
-// members to surviving targets and returns the first usable group name.
-func rewriteGroups(raw any, alive map[string]bool, keep map[string]struct{}) ([]any, string) {
-	list, ok := raw.([]any)
-	if !ok {
-		// No groups at all: synthesise a single selector over the survivors.
-		return synthesizeGroups(keep), firstOrDefault(keep, "")
-	}
-
-	infos := make([]*groupInfo, 0, len(list))
-	for _, entry := range list {
-		m, ok := entry.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := m["name"].(string)
-		if name == "" {
-			continue
-		}
-		infos = append(infos, &groupInfo{entry: m, name: name, members: rawList(m["proxies"])})
-	}
-
-	// A group referencing another group can only be decided once that group
-	// is known to survive, so iterate until the alive set stops growing.
-	for iter := 0; iter <= len(infos); iter++ {
-		grew := false
-
-		for _, gi := range infos {
-			if alive[gi.name] {
-				continue
-			}
-			for _, member := range gi.members {
-				if n, _ := member.(string); alive[n] {
-					alive[gi.name] = true
-					grew = true
-					break
-				}
-			}
-		}
-
-		if !grew {
-			break
-		}
-	}
-
-	out := make([]any, 0, len(infos))
-	first := ""
-
-	for _, gi := range infos {
-		if !alive[gi.name] {
-			continue
-		}
-
-		members := make([]any, 0, len(gi.members))
-		for _, member := range gi.members {
-			if n, ok := member.(string); ok && alive[n] {
-				members = append(members, member)
-			}
-		}
-		if len(members) == 0 {
-			delete(alive, gi.name)
-			continue
-		}
-
-		if len(members) != len(gi.members) {
-			entry := make(map[string]any, len(gi.entry))
-			for k, v := range gi.entry {
-				entry[k] = v
-			}
-			entry["proxies"] = members
-
-			// `now` must name a member that still exists.
-			if now, hasNow := entry["now"]; hasNow {
-				if s, _ := now.(string); !containsString(members, s) {
-					delete(entry, "now")
-				}
-			}
-
-			gi.entry = entry
-		}
-
-		if first == "" {
-			first = gi.name
-		}
-
-		out = append(out, gi.entry)
-	}
-
-	if len(out) == 0 {
-		return synthesizeGroups(keep), firstOrDefault(keep, "")
-	}
-
-	return out, first
-}
-
-func synthesizeGroups(keep map[string]struct{}) []any {
+// policyGroups builds the published groups over every surviving node, so all of
+// them cover the whole screened set no matter how few nodes there are.
+func policyGroups(keep map[string]struct{}) []any {
 	members := make([]any, 0, len(keep))
 	for name := range keep {
 		members = append(members, name)
 	}
 	sortAny(members)
 
-	return []any{map[string]any{
-		"name":    "PROXY",
-		"type":    "select",
-		"proxies": members,
-	}}
+	// Auto leads because it is where the published rules send traffic, so it is
+	// the group a reader sees doing the work.
+	group := func(name, kind string, extra ...any) map[string]any {
+		entry := map[string]any{
+			"name":    name,
+			"type":    kind,
+			"proxies": members,
+		}
+		for i := 0; i+1 < len(extra); i += 2 {
+			entry[extra[i].(string)] = extra[i+1]
+		}
+
+		return entry
+	}
+
+	return []any{
+		// Picks whichever surviving node answers fastest, and re-picks on its
+		// own when that node stops answering.
+		group(policyAuto, "url-test", "url", policyAuto),
+		// The only group a reader can move by hand.
+		group(policySelect, "select"),
+		// Spreads connections over the surviving nodes instead of funnelling
+		// everything through the fastest one.
+		group(policyLoad, "load-balance", "strategy", loadBalanceRound),
+		// Holds the first node that works and only moves off it once it stops.
+		group(policyFallback, "fallback", "url", policyAuto),
+	}
 }
 
-// rewriteRules keeps a rule only when its target still resolves, and guarantees
-// a MATCH rule so the published configuration can actually route traffic.
-func rewriteRules(raw any, alive map[string]bool, firstGroup string) []any {
-	list, ok := raw.([]any)
-	if !ok {
-		return []any{fmt.Sprintf("MATCH,%s", firstGroup)}
-	}
-
-	out := make([]any, 0, len(list))
-	hasMatch := false
-
-	for _, entry := range list {
-		rule, isStr := entry.(string)
-		if !isStr {
-			continue
-		}
-
-		target, isMatch, ok := ruleTarget(rule)
-		if !ok || !alive[target] {
-			continue
-		}
-
-		if isMatch {
-			hasMatch = true
-		}
-
-		out = append(out, rule)
-	}
-
-	if !hasMatch {
-		out = append(out, fmt.Sprintf("MATCH,%s", firstGroup))
+// rewriteRules returns the fixed published rule list.
+//
+// The source subscription's rules are discarded rather than rewritten. They
+// name groups that are not published and pin the reader out of the choice they
+// just made in Clash Verge; a fixed list that ends in MATCH,Select is the one
+// layout where moving a group is what visibly does the work.
+func rewriteRules() []any {
+	out := make([]any, len(publishedRules))
+	for i, rule := range publishedRules {
+		out[i] = rule
 	}
 
 	return out
 }
 
-// ruleTarget splits "TYPE,arg...,TARGET" and reports the final field.
-func ruleTarget(rule string) (target string, isMatch bool, ok bool) {
+// ruleNoResolve is a flag some rules end with. It is not a target, and reading
+// it as one loses every such rule.
+const ruleNoResolve = "no-resolve"
+
+// ruleTarget splits "TYPE,arg...,TARGET[,no-resolve]" and reports the target,
+// whether the rule is a catch-all, and whether the flag was present.
+func ruleTarget(rule string) (target string, isMatch bool, noResolve bool, ok bool) {
 	parts := strings.Split(rule, ",")
 	if len(parts) < 2 {
-		return "", false, false
+		return "", false, false, false
+	}
+
+	if strings.EqualFold(strings.TrimSpace(parts[len(parts)-1]), ruleNoResolve) {
+		noResolve = true
+		parts = parts[:len(parts)-1]
+	}
+
+	if len(parts) < 2 {
+		return "", false, false, false
 	}
 
 	target = strings.TrimSpace(parts[len(parts)-1])
 	if target == "" {
-		return "", false, false
+		return "", false, false, false
 	}
 
 	head := strings.ToUpper(strings.TrimSpace(parts[0]))
 
-	return target, head == "MATCH" || head == "NO-MATCH", true
+	return target, head == "MATCH" || head == "NO-MATCH", noResolve, true
 }
 
 func rewriteSubRules(raw any, alive map[string]bool) any {
@@ -296,7 +257,7 @@ func rewriteSubRules(raw any, alive map[string]bool) any {
 		if !isStr {
 			continue
 		}
-		if target, _, ok := ruleTarget(rule); ok && alive[target] {
+		if target, _, _, ok := ruleTarget(rule); ok && alive[target] {
 			out = append(out, rule)
 		}
 	}
@@ -371,6 +332,12 @@ func verify(out []byte, keep map[string]struct{}) error {
 		alive[name] = true
 	}
 
+	// Auto is where the published rules send traffic. A configuration without
+	// it would load and then match everything onto a target that is not there.
+	if !groupNames[policyAuto] {
+		return fmt.Errorf("published configuration has no %q group", policyAuto)
+	}
+
 	if groups, ok := root["proxy-groups"].([]any); ok {
 		for _, entry := range groups {
 			m, ok := entry.(map[string]any)
@@ -397,7 +364,7 @@ func verify(out []byte, keep map[string]struct{}) error {
 			if !isStr {
 				continue
 			}
-			target, isMatch, ok := ruleTarget(rule)
+			target, isMatch, _, ok := ruleTarget(rule)
 			if !ok {
 				return fmt.Errorf("malformed rule %q", rule)
 			}
@@ -414,36 +381,6 @@ func verify(out []byte, keep map[string]struct{}) error {
 	}
 
 	return nil
-}
-
-func rawList(v any) []any {
-	switch list := v.(type) {
-	case []any:
-		return list
-	case nil:
-		return nil
-	default:
-		return nil
-	}
-}
-
-func containsString(list []any, want string) bool {
-	for _, v := range list {
-		if s, ok := v.(string); ok && s == want {
-			return true
-		}
-	}
-	return false
-}
-
-func firstOrDefault(keep map[string]struct{}, fallback string) string {
-	if fallback != "" {
-		return fallback
-	}
-	for name := range keep {
-		return name
-	}
-	return "PROXY"
 }
 
 func sortAny(list []any) {

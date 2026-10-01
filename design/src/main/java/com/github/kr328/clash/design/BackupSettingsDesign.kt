@@ -18,6 +18,8 @@ import com.github.kr328.clash.service.backup.BackupManager
 import com.github.kr328.clash.service.backup.BackupRecord
 import com.github.kr328.clash.service.backup.BackupRecordStore
 import com.github.kr328.clash.service.store.ServiceStore
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,10 +46,49 @@ class BackupSettingsDesign(
 
     private lateinit var verifyRow: ClickablePreference
 
+    /**
+     * True while a restore owns the screen.
+     *
+     * A restore may stop the tunnel, which makes the activity recreate itself.
+     * Doing that mid-restore would tear down the coroutine performing it, so
+     * the activity reads this flag and holds off until the result is out.
+     */
+    @Volatile
+    var restoring: Boolean = false
+
+    /**
+     * Stops the tunnel for the duration of a restore and reports whether it
+     * was running. Supplied by the activity, which is the only place that can
+     * reach the service controls.
+     */
+    var prepareRestore: (suspend () -> Boolean)? = null
+
+    /** Brings the tunnel back once the result has been on screen long enough. */
+    var resumeClash: (() -> Unit)? = null
+
+    /**
+     * Rebuilds this screen once a restore has landed.
+     *
+     * Every row here reads its store once, at construction, so without a
+     * rebuild the WebDAV fields keep showing the values the restore has just
+     * replaced - which reads as a restore that did nothing. A running tunnel
+     * supplies this on its own by announcing ClashStart; this covers the case
+     * where there was no tunnel to restart.
+     */
+    var refreshAfterRestore: (() -> Unit)? = null
+
+    private var bottomBar: Snackbar? = null
+
     fun showWorking(message: String) {
         indicator.view.visibility = View.VISIBLE
         indicator.title = context.getText(R.string.backup_status)
         indicator.setMessage(message)
+
+        // The status row sits at the top of a long page, and every WebDAV
+        // action is started from the bottom of it: on its own the screen looks
+        // dead for as long as the round trip takes, which for a download can
+        // be minutes. Say so where the finger just was.
+        showBottom(message, ToastDuration.Indefinite)
     }
 
     fun showResult(message: String) {
@@ -55,13 +96,40 @@ class BackupSettingsDesign(
         indicator.title = context.getText(R.string.backup_status)
         indicator.setMessage(message)
 
-        // The status row sits at the top of a long page, so a result would be
-        // off-screen exactly when the action was triggered down in the WebDAV
-        // section. Mirror every outcome through a snackbar at the bottom.
-        launch { showToast(message, ToastDuration.Long) }
+        // Mirrors the outcome at the bottom of the screen for the same reason.
+        showBottom(message, ToastDuration.Long)
+    }
+
+    /**
+     * Replaces whatever is showing at the bottom of the screen.
+     *
+     * The working bar has to be dismissed by hand: one with an indefinite
+     * duration never leaves on its own, and the next bar would queue behind it
+     * instead of appearing.
+     */
+    private fun showBottom(message: CharSequence, duration: ToastDuration) {
+        launch(Dispatchers.Main) {
+            bottomBar?.dismiss()
+
+            val bar = Snackbar.make(
+                root,
+                message,
+                when (duration) {
+                    ToastDuration.Short -> Snackbar.LENGTH_SHORT
+                    ToastDuration.Long -> Snackbar.LENGTH_LONG
+                    ToastDuration.Indefinite -> Snackbar.LENGTH_INDEFINITE
+                },
+            )
+
+            bottomBar = bar
+            bar.show()
+        }
     }
 
     fun hideIndicator() {
+        bottomBar?.dismiss()
+        bottomBar = null
+
         indicator.view.visibility = View.GONE
     }
 
@@ -69,7 +137,7 @@ class BackupSettingsDesign(
         showWorking(message)
 
         // The design scope is Unconfined, so a coroutine that comes back from
-        // withContext(IO) would keep executing on the IO thread — and touching
+        // withContext(IO) would keep executing on the IO thread 鈥?and touching
         // the views from there is what threw the screen away after an upload.
         // Pin the whole round trip (result included) to the main dispatcher.
         launch(Dispatchers.Main) {
@@ -84,6 +152,59 @@ class BackupSettingsDesign(
                     showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
                 },
             )
+        }
+    }
+
+    /**
+     * Runs a restore.
+     *
+     * On top of the file work this owns the screen for as long as it needs:
+     * the tunnel is stopped first so nothing is holding the profile database
+     * open underneath the replacement, the activity stops recreating itself
+     * while [restoring] is set - a recreate would tear down this coroutine -
+     * and the tunnel only comes back after the result has been on screen for
+     * a moment, because restarting it is what makes the activity refresh and
+     * take the message with it.
+     */
+    private fun runRestore(message: String, block: suspend () -> Int) {
+        showWorking(message)
+
+        launch(Dispatchers.Main) {
+            var resume = false
+
+            val result = runCatching {
+                restoring = true
+                resume = runCatching { prepareRestore?.invoke() ?: false }
+                    .onFailure { Log.w("backup: tunnel was not stopped cleanly", it) }
+                    .getOrDefault(false)
+
+                withContext(Dispatchers.IO) { block() }
+            }
+
+            result.fold(
+                onSuccess = { count ->
+                    Log.i("backup: restore finished ($count entries)")
+                    showResult(context.getString(R.string.backup_restored, count))
+                },
+                onFailure = {
+                    Log.w("backup: restore failed", it)
+                    showResult(
+                        context.getString(R.string.backup_failed, it.message ?: it.toString())
+                    )
+                },
+            )
+
+            delay(RESTORE_RESULT_MS)
+
+            restoring = false
+
+            if (resume) {
+                runCatching { resumeClash?.invoke() }
+                    .onFailure { Log.w("backup: tunnel was not restarted", it) }
+            } else {
+                runCatching { refreshAfterRestore?.invoke() }
+                    .onFailure { Log.w("backup: screen was not refreshed", it) }
+            }
         }
     }
 
@@ -117,7 +238,7 @@ class BackupSettingsDesign(
     }
 
     fun doImport(uri: Uri) {
-        run(context.getString(R.string.backup_import)) {
+        runRestore(context.getString(R.string.backup_import)) {
             val file = manager.importFromUri(uri)
             val count = manager.restoreBackup(file)
             BackupRecordStore.add(
@@ -131,7 +252,7 @@ class BackupSettingsDesign(
                     ok = true,
                 )
             )
-            context.getString(R.string.backup_restored, count)
+            count
         }
     }
 
@@ -265,7 +386,7 @@ class BackupSettingsDesign(
 
     /**
      * Restores straight from the server: pick a file, confirm the replacement,
-     * then download it and unpack it over the stores — the WebDAV counterpart
+     * then download it and unpack it over the stores 鈥?the WebDAV counterpart
      * of the local import flow.
      */
     fun webdavRestore() {
@@ -285,52 +406,37 @@ class BackupSettingsDesign(
                     if (list.isEmpty()) {
                         showResult(context.getString(R.string.backup_records_empty))
                     } else {
-                        AlertDialog.Builder(context)
+                        // The list dialog is dismissed before the confirm
+                        // dialog takes its place. Leaving it up would put a
+                        // second window over the first and then sit there
+                        // covering whatever the restore has to say.
+                        var listDialog: AlertDialog? = null
+
+                        listDialog = AlertDialog.Builder(context)
                             .setTitle(R.string.backup_webdav_restore)
                             .setItems(list.map { it.name }.toTypedArray()) { _, which ->
                                 val f = list[which]
 
+                                listDialog?.dismiss()
+
                                 confirmRestore {
-                                    launch(Dispatchers.Main) {
-                                        showWorking(f.name)
+                                    runRestore(f.name) {
+                                        val file = manager.downloadFromWebdav(f.name)
+                                        val count = manager.restoreBackup(file)
 
-                                        val restored = runCatching {
-                                            val file = withContext(Dispatchers.IO) {
-                                                manager.downloadFromWebdav(f.name)
-                                            }
-                                            val count = manager.restoreBackup(file)
-
-                                            withContext(Dispatchers.IO) {
-                                                BackupRecordStore.add(
-                                                    context,
-                                                    BackupRecord(
-                                                        time = System.currentTimeMillis(),
-                                                        action = BackupRecord.ACTION_RESTORE,
-                                                        target = BackupRecord.webdavTarget(f.name),
-                                                        fileName = f.name,
-                                                        sizeBytes = file.length(),
-                                                        ok = true,
-                                                    )
-                                                )
-                                            }
-
-                                            count
-                                        }
-
-                                        restored.fold(
-                                            onSuccess = {
-                                                showResult(context.getString(R.string.backup_restored, it))
-                                            },
-                                            onFailure = {
-                                                Log.w("backup: webdav restore failed", it)
-                                                showResult(
-                                                    context.getString(
-                                                        R.string.backup_failed,
-                                                        it.message ?: it.toString(),
-                                                    )
-                                                )
-                                            },
+                                        BackupRecordStore.add(
+                                            context,
+                                            BackupRecord(
+                                                time = System.currentTimeMillis(),
+                                                action = BackupRecord.ACTION_RESTORE,
+                                                target = BackupRecord.webdavTarget(f.name),
+                                                fileName = f.name,
+                                                sizeBytes = file.length(),
+                                                ok = true,
+                                            ),
                                         )
+
+                                        count
                                     }
                                 }
                             }
@@ -354,18 +460,19 @@ class BackupSettingsDesign(
         binding.scrollRoot.bindAppBarElevation(binding.activityBarLayout)
 
         val screen = preferenceScreen(context) {
-            indicator = progress(R.string.backup_status) {
+            indicator = progress(R.string.backup_status, card = true) {
                 view.visibility = View.GONE
             }
 
-            tips(R.string.backup_tips)
+            tips(R.string.backup_tips, card = true)
 
-            category(R.string.backup_local)
+            category(R.string.backup_local, card = true)
 
             clickable(
                 title = R.string.backup_export,
                 icon = R.drawable.ic_baseline_save,
                 summary = R.string.backup_export_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.ExportFile) }
             }
@@ -374,6 +481,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_import,
                 icon = R.drawable.ic_baseline_restore,
                 summary = R.string.backup_import_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.ImportFile) }
             }
@@ -382,11 +490,12 @@ class BackupSettingsDesign(
                 title = R.string.backup_records,
                 icon = R.drawable.ic_baseline_view_list,
                 summary = R.string.backup_records_summary,
+                card = true,
             ) {
                 clicked { showLocalRecords() }
             }
 
-            category(R.string.backup_webdav)
+            category(R.string.backup_webdav, card = true)
 
             editableText(
                 value = srvStore::webdavUrl,
@@ -394,6 +503,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_url,
                 icon = R.drawable.ic_baseline_domain,
                 placeholder = R.string.backup_webdav_url_summary,
+                card = true,
             )
 
             editableText(
@@ -402,6 +512,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_username,
                 icon = R.drawable.ic_baseline_person,
                 placeholder = R.string.backup_webdav_username_summary,
+                card = true,
             )
 
             editableText(
@@ -410,7 +521,12 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_password,
                 icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.backup_webdav_password_summary,
-            )
+                card = true,
+            ) {
+                // The row must never show the password itself; the editor still
+                // opens on the stored value so it can be changed, not retyped.
+                password = true
+            }
 
             editableText(
                 value = srvStore::webdavPath,
@@ -418,12 +534,14 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_path,
                 icon = R.drawable.ic_outline_folder,
                 placeholder = R.string.backup_webdav_path_summary,
+                card = true,
             )
 
             verifyRow = clickable(
                 title = R.string.backup_webdav_verify,
                 icon = R.drawable.ic_outline_check_circle,
                 summary = R.string.backup_webdav_verify_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.WebdavVerify) }
             }
@@ -432,6 +550,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_upload,
                 icon = R.drawable.ic_baseline_publish,
                 summary = R.string.backup_webdav_upload_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.WebdavUpload) }
             }
@@ -440,6 +559,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_list,
                 icon = R.drawable.ic_outline_inbox,
                 summary = R.string.backup_webdav_list_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.WebdavList) }
             }
@@ -448,6 +568,7 @@ class BackupSettingsDesign(
                 title = R.string.backup_webdav_restore,
                 icon = R.drawable.ic_baseline_restore,
                 summary = R.string.backup_webdav_restore_summary,
+                card = true,
             ) {
                 clicked { requests.trySend(Request.WebdavRestore) }
             }
@@ -458,3 +579,8 @@ class BackupSettingsDesign(
         binding.content.addView(screen.root)
     }
 }
+
+// Long enough to read the result. The tunnel restart that follows recreates
+// the activity, which takes the snackbar with it, so the message has to have
+// had its time before that happens.
+private const val RESTORE_RESULT_MS = 3_000L

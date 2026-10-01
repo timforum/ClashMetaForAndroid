@@ -31,6 +31,24 @@ abstract class Database : RoomDatabase() {
 
         private var softDatabase: SoftReference<Database?> = SoftReference(null)
 
+        /**
+         * Drops the open connection so the next lookup reads whatever is on
+         * disk.
+         *
+         * A restore replaces profiles.db underneath a process that has held it
+         * open since the app started; without this the restored rows would stay
+         * invisible for the rest of that process's life. The reference is
+         * cleared under the same lock the getter takes, so a concurrent reader
+         * cannot be handed a database that is already closing.
+         */
+        @Synchronized
+        fun reset() {
+            val stale = softDatabase.get()
+
+            softDatabase = SoftReference(null)
+            stale?.close()
+        }
+
         private fun open(context: Context): Database {
             return Room.databaseBuilder(
                 context.applicationContext,

@@ -13,6 +13,15 @@ interface EditableTextPreference : ClickablePreference {
     var placeholder: CharSequence?
     var empty: CharSequence?
     var text: String?
+
+    /**
+     * Keeps the stored value out of sight: the row shows a fixed-length mask
+     * instead of the value, and the editor masks what is typed. The value is
+     * still loaded into the editor, so a saved token can be changed rather than
+     * retyped. The mask is a fixed length so it does not disclose how long the
+     * secret is.
+     */
+    var password: Boolean
 }
 
 fun <T> PreferenceScreen.editableText(
@@ -22,11 +31,15 @@ fun <T> PreferenceScreen.editableText(
     @DrawableRes icon: Int? = null,
     @StringRes placeholder: Int? = null,
     @StringRes empty: Int? = null,
+    card: Boolean = false,
     configure: EditableTextPreference.() -> Unit = {},
 ): EditableTextPreference {
-    val impl = object : EditableTextPreference, ClickablePreference by clickable(title, icon) {
+    val impl = object : EditableTextPreference, ClickablePreference by clickable(title, icon, card = card) {
         override var placeholder: CharSequence? = null
         override var empty: CharSequence? = null
+
+        override var password: Boolean = false
+
         override var text: String? = null
             set(value) {
                 field = value
@@ -37,6 +50,11 @@ fun <T> PreferenceScreen.editableText(
                     }
                     value.isEmpty() -> {
                         this.summary = this.empty
+                    }
+                    // A secret is reported as "set", never as itself: the row
+                    // is readable over someone's shoulder.
+                    password -> {
+                        this.summary = MASK
                     }
                     else -> {
                         this.summary = value
@@ -67,6 +85,7 @@ fun <T> PreferenceScreen.editableText(
                     title = impl.title,
                     reset = context.getText(R.string.reset),
                     hint = impl.title,
+                    password = impl.password,
                 )
 
                 val newValue = withContext(Dispatchers.IO) {
@@ -80,3 +99,6 @@ fun <T> PreferenceScreen.editableText(
 
     return impl
 }
+
+// A fixed length on purpose: the row must not disclose how long the secret is.
+private const val MASK = "••••••••"

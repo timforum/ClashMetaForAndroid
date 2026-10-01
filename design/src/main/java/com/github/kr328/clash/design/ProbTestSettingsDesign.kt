@@ -133,6 +133,7 @@ class ProbTestSettingsDesign(
                 icon = R.drawable.ic_baseline_search,
                 title = R.string.probtest_enabled,
                 summary = R.string.probtest_enabled_summary,
+                card = true,
             ) {
                 listener = OnChangedListener {
                     dependencies.forEach { it.enabled = srvStore.probtestEnabled }
@@ -141,19 +142,30 @@ class ProbTestSettingsDesign(
 
             // Sits directly under the switch so the effect of tapping "run a
             // round now" is visible where the tap happened.
-            indicator = progress(R.string.probtest_status) {
+            indicator = progress(R.string.probtest_status, card = true) {
                 view.visibility = View.GONE
             }
 
-            tips(R.string.probtest_tips)
+            tips(R.string.probtest_tips, card = true)
 
-            category(R.string.probtest_sources)
+            category(R.string.probtest_sources, card = true)
+
+            editableText(
+                value = srvStore::probtestTestUrl,
+                adapter = NullableTextAdapter.Text,
+                title = R.string.probtest_primary_sub,
+                icon = R.drawable.ic_baseline_domain,
+                placeholder = R.string.probtest_primary_sub_summary,
+                card = true,
+                configure = dependencies::add,
+            )
 
             switch(
                 value = srvStore::probtestIncludeImported,
                 icon = R.drawable.ic_outline_inbox,
                 title = R.string.probtest_include_imported,
                 summary = R.string.probtest_include_imported_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
@@ -163,10 +175,11 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_candidates,
                 icon = R.drawable.ic_baseline_view_list,
                 placeholder = R.string.probtest_candidates_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
-            category(R.string.probtest_schedule)
+            category(R.string.probtest_schedule, card = true)
 
             editableText(
                 value = srvStore::probtestIntervalMinutes,
@@ -174,6 +187,7 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_interval,
                 icon = R.drawable.ic_outline_update,
                 placeholder = R.string.probtest_interval_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
@@ -183,19 +197,11 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_round_gap,
                 icon = R.drawable.ic_baseline_swap_vert,
                 placeholder = R.string.probtest_round_gap_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
-            editableText(
-                value = srvStore::probtestTestUrl,
-                adapter = NullableTextAdapter.Text,
-                title = R.string.probtest_test_url,
-                icon = R.drawable.ic_baseline_flash_on,
-                placeholder = R.string.probtest_test_url_summary,
-                configure = dependencies::add,
-            )
-
-            category(R.string.probtest_github)
+            category(R.string.probtest_github, card = true)
 
             editableText(
                 value = srvStore::probtestGitHubToken,
@@ -203,7 +209,13 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_github_token,
                 icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.probtest_github_token_summary,
-                configure = dependencies::add,
+                card = true,
+                configure = {
+                    // The row must never show the token itself; the editor still
+                    // opens on the stored value so it can be changed, not retyped.
+                    password = true
+                    dependencies.add(this)
+                },
             )
 
             editableText(
@@ -212,6 +224,7 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_github_repo,
                 icon = R.drawable.ic_outline_article,
                 placeholder = R.string.probtest_github_repo_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
@@ -221,6 +234,7 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_github_branch,
                 icon = R.drawable.ic_outline_label,
                 placeholder = R.string.probtest_github_branch_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
@@ -230,10 +244,11 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_github_path,
                 icon = R.drawable.ic_outline_folder,
                 placeholder = R.string.probtest_github_path_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
-            category(R.string.probtest_service)
+            category(R.string.probtest_service, card = true)
 
             editableText(
                 value = srvStore::probtestUploadUrl,
@@ -241,6 +256,7 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_upload_url,
                 icon = R.drawable.ic_baseline_publish,
                 placeholder = R.string.probtest_upload_url_summary,
+                card = true,
                 configure = dependencies::add,
             )
 
@@ -250,15 +266,20 @@ class ProbTestSettingsDesign(
                 title = R.string.probtest_upload_token,
                 icon = R.drawable.ic_baseline_key,
                 placeholder = R.string.probtest_upload_token_summary,
-                configure = dependencies::add,
+                card = true,
+                configure = {
+                    password = true
+                    dependencies.add(this)
+                },
             )
 
-            category(R.string.probtest_actions)
+            category(R.string.probtest_actions, card = true)
 
             clickable(
                 title = R.string.probtest_run_now,
                 icon = R.drawable.ic_baseline_replay,
                 summary = R.string.probtest_run_now_summary,
+                card = true,
             ) {
                 clicked {
                     requests.trySend(Request.RunNow)

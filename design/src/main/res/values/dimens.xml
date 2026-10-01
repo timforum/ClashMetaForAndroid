@@ -56,6 +56,16 @@
     <!-- Preference -->
     <dimen name="preference_fullscreen_button_padding">20dp</dimen>
 
+    <!--  Card Preference: an inset row drawn as a light rounded surface, with a
+         gap between neighbours so the page reads as a list of cards  -->
+    <dimen name="preference_card_radius">12dp</dimen>
+    <dimen name="preference_card_margin_horizontal">12dp</dimen>
+    <dimen name="preference_card_margin_vertical">3dp</dimen>
+    <!--  Section heading inside a card list: it keeps no background of its own,
+         so the extra room above is the only thing separating two card groups -->
+    <dimen name="preference_section_margin_top">18dp</dimen>
+    <dimen name="preference_section_padding_bottom">6dp</dimen>
+
     <!-- Main Design -->
     <dimen name="main_card_margin_vertical">5dp</dimen>
     <dimen name="main_label_margin_vertical">2dp</dimen>

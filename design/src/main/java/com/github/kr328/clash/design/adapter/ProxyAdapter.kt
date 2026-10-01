@@ -31,7 +31,11 @@ class ProxyAdapter(
 
             val isSelector = selectable
 
-            isFocusable = isSelector
+            // A remote walks the grid with the d-pad, so every node has to be
+            // stoppable - restricting focus to selectable groups made the whole
+            // list of read-only groups invisible to the remote. Only the tap
+            // stays gated, since selecting is meaningless outside a Selector.
+            isFocusable = true
             isClickable = isSelector
 
             current.update(true)

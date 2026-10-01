@@ -1,6 +1,7 @@
 package com.github.kr328.clash.design.dialog
 
 import android.content.Context
+import android.text.InputType
 import androidx.appcompat.app.AlertDialog
 import androidx.core.widget.doOnTextChanged
 import com.github.kr328.clash.design.R
@@ -17,7 +18,7 @@ suspend fun Context.requestModelTextInput(
     error: CharSequence? = null,
     validator: Validator = ValidatorAcceptAll,
 ): String {
-    return this.requestModelTextInput(initial, title, null, hint, error, validator)!!
+    return this.requestModelTextInput(initial, title, null, hint, error, validator = validator)!!
 }
 
 suspend fun Context.requestModelTextInput(
@@ -26,6 +27,7 @@ suspend fun Context.requestModelTextInput(
     reset: CharSequence?,
     hint: CharSequence? = null,
     error: CharSequence? = null,
+    password: Boolean = false,
     validator: Validator = ValidatorAcceptAll,
 ): String? {
     return suspendCancellableCoroutine {
@@ -68,6 +70,14 @@ suspend fun Context.requestModelTextInput(
 
             binding.textField.apply {
                 binding.textLayout.isErrorEnabled = error != null
+
+                // Mask what is typed for a secret. The password toggle stays
+                // available so a mistyped token can still be checked, and the
+                // field starts hidden because that is how it was left before.
+                if (password) {
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    setSelection(text?.length ?: 0)
+                }
 
                 doOnTextChanged { text, _, _, _ ->
                     if (!validator(text?.toString() ?: "")) {

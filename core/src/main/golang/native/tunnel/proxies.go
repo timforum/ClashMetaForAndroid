@@ -36,21 +36,42 @@ type ProxyGroup struct {
 	Proxies []*Proxy `json:"proxies"`
 }
 
-type sortableProxyList struct {
-	list []*Proxy
-	less func(a, b *Proxy) bool
+// isPolicyGroup reports whether p is one of the "just pick something" groups.
+// They are named after what they do rather than after a provider, and they
+// carry no delay of their own, so neither title nor delay ordering says
+// anything useful about them.
+func isPolicyGroup(p *Proxy) bool {
+	switch p.Type {
+	case C.URLTest.String(), C.LoadBalance.String(), C.Fallback.String():
+		return true
+	default:
+		return false
+	}
 }
 
-func (s *sortableProxyList) Len() int {
-	return len(s.list)
-}
+// sortProxyList sorts list by less, but keeps the policy groups on top in the
+// order the group declared them. They are the entries a user reaches for when
+// they do not want to think, and burying them mid-list - or reordering them
+// against each other by a name that means nothing - turns the most common
+// choice into a hunt.
+func sortProxyList(list []*Proxy, less func(a, b *Proxy) bool) {
+	pinned := make([]*Proxy, 0, len(list))
+	rest := make([]*Proxy, 0, len(list))
 
-func (s *sortableProxyList) Less(i, j int) bool {
-	return s.less(s.list[i], s.list[j])
-}
+	for _, p := range list {
+		if isPolicyGroup(p) {
+			pinned = append(pinned, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
 
-func (s *sortableProxyList) Swap(i, j int) {
-	s.list[i], s.list[j] = s.list[j], s.list[i]
+	sort.SliceStable(rest, func(i, j int) bool {
+		return less(rest[i], rest[j])
+	})
+
+	copy(list, pinned)
+	copy(list[len(pinned):], rest)
 }
 
 func QueryProxyGroupNames(excludeNotSelectable bool) []string {
@@ -103,23 +124,13 @@ func QueryProxyGroup(name string, sortMode SortMode, uiSubtitlePattern *regexp2.
 
 	switch sortMode {
 	case Title:
-		wrapper := &sortableProxyList{
-			list: proxies,
-			less: func(a, b *Proxy) bool {
-				return strings.Compare(a.Title, b.Title) < 0
-			},
-		}
-
-		sort.Sort(wrapper)
+		sortProxyList(proxies, func(a, b *Proxy) bool {
+			return strings.Compare(a.Title, b.Title) < 0
+		})
 	case Delay:
-		wrapper := &sortableProxyList{
-			list: proxies,
-			less: func(a, b *Proxy) bool {
-				return a.Delay < b.Delay
-			},
-		}
-
-		sort.Sort(wrapper)
+		sortProxyList(proxies, func(a, b *Proxy) bool {
+			return a.Delay < b.Delay
+		})
 	case Default:
 	default:
 	}

@@ -6,9 +6,13 @@ import com.github.kr328.clash.design.BackupSettingsDesign
 import com.github.kr328.clash.design.R
 import com.github.kr328.clash.service.backup.BackupManager
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.util.startClashService
+import com.github.kr328.clash.util.stopClashService
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -20,9 +24,63 @@ class BackupSettingsActivity : BaseActivity<BackupSettingsDesign>() {
 
         setContentDesign(design)
 
+        // A restore replaces the database the tunnel has been reading all
+        // along, so the tunnel has to be down while it runs and back up when
+        // it is done. Both ends of that live here: this is the only place that
+        // can reach the service controls.
+        design.prepareRestore = {
+            val running = clashRunning
+
+            if (running) {
+                stopClashService()
+
+                // A stop that never lands must not hold the screen hostage
+                // forever; the restore proceeds either way and the bounded
+                // wait only decides whether the tunnel gets restarted after.
+                withTimeoutOrNull(CLASH_STOP_TIMEOUT_MS) {
+                    while (clashRunning) delay(50L)
+                }
+            }
+
+            running
+        }
+
+        design.resumeClash = {
+            // It was running a moment ago, so the VPN consent has already been
+            // granted and this cannot come back with a prompt to answer.
+            runCatching {
+                if (startClashService() != null) {
+                    Log.w("backup: tunnel restart asked for VPN consent, skipped")
+                }
+            }.onFailure {
+                Log.w("backup: tunnel restart failed", it)
+            }
+        }
+
+        // Without a tunnel to restart no ClashStart/ServiceRecreated event
+        // fires, and the WebDAV fields on this page read their store only once
+        // at construction: left alone they would keep showing what was there
+        // before the restore.
+        design.refreshAfterRestore = {
+            recreate()
+        }
+
         while (isActive) {
             select<Unit> {
                 events.onReceive {
+                    // A restore in progress owns this screen. Stopping and
+                    // restarting the tunnel both announce themselves here, and
+                    // recreating the activity at either moment would cancel the
+                    // coroutine that is performing the restore - which is how
+                    // a restore ends with nothing to show for it.
+                    val wouldRecreate = it == Event.ClashStart ||
+                        it == Event.ClashStop ||
+                        it == Event.ServiceRecreated
+
+                    if (design.restoring && wouldRecreate) {
+                        return@onReceive
+                    }
+
                     when (it) {
                         Event.ClashStart, Event.ClashStop, Event.ServiceRecreated ->
                             recreate()
@@ -90,5 +148,12 @@ class BackupSettingsActivity : BaseActivity<BackupSettingsDesign>() {
                 }
             }
         }
+    }
+
+    companion object {
+        // How long to wait for the tunnel to confirm it stopped before the
+        // restore goes ahead anyway. A stop that never lands only costs the
+        // restart afterwards, it never blocks the screen.
+        private const val CLASH_STOP_TIMEOUT_MS = 5_000L
     }
 }

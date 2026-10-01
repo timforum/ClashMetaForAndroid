@@ -112,6 +112,13 @@ class ProbTestPipeline(private val context: Context) {
             )
         }
 
+        // The primary candidate is required. Without it a round would screen
+        // only whatever happens to be imported, which is not what the user asked
+        // for when they set up a feed.
+        if (store.probtestTestUrl.isBlank()) {
+            return ProbTestOutcome(false, "No candidate subscription configured")
+        }
+
         val candidates = collectCandidates(store)
         if (candidates.isEmpty()) {
             return ProbTestOutcome(false, "No candidate subscription configured")
@@ -130,7 +137,9 @@ class ProbTestPipeline(private val context: Context) {
         }
 
         val options = ProbTestOptions(
-            testUrl = store.probtestTestUrl,
+            // Empty hands the probe to the core default (Cloudflare generate_204).
+            // The Test URL field is a candidate subscription, not a probe target.
+            testUrl = "",
             rounds = ROUNDS,
             roundGapMs = store.probtestRoundGapSeconds.coerceAtLeast(0L) * 1000L,
         )
@@ -248,25 +257,39 @@ class ProbTestPipeline(private val context: Context) {
     }
 
     /**
-     * Screens every subscription the user already imports plus any extra URL,
-     * because a subscription that is not worth using as the live profile can
-     * still contribute good nodes to the published feed.
+     * The subscriptions a round screens: the required primary, any extra URLs,
+     * and, when enabled, every subscription already imported. A subscription
+     * that is not worth using as the live profile can still contribute good
+     * nodes to the published feed.
+     *
+     * The same URL reached through more than one source (imported plus listed
+     * again, or listed twice) is screened once, because a second fetch of the
+     * identical document only duplicates the nodes it returns.
      */
     private suspend fun collectCandidates(store: ServiceStore): List<ProbTestCandidate> {
+        val seen = LinkedHashSet<String>()
         val candidates = mutableListOf<ProbTestCandidate>()
 
-        if (store.probtestIncludeImported) {
-            for (profile in ImportedDao().queryAll()) {
-                if (profile.type == Profile.Type.Url && profile.source.isNotBlank()) {
-                    candidates += ProbTestCandidate(profile.name, profile.source)
-                }
-            }
+        val primary = store.probtestTestUrl.trim()
+        if (primary.isNotEmpty()) {
+            seen += primary
+            candidates += ProbTestCandidate(primary, primary)
         }
 
         for (line in store.probtestCandidates.lineSequence()) {
             val url = line.trim()
-            if (url.isNotEmpty() && candidates.none { it.url == url }) {
+            if (url.isNotEmpty() && seen.add(url)) {
                 candidates += ProbTestCandidate(url, url)
+            }
+        }
+
+        if (store.probtestIncludeImported) {
+            for (profile in ImportedDao().queryAll()) {
+                if (profile.type == Profile.Type.Url && profile.source.isNotBlank() &&
+                    seen.add(profile.source)
+                ) {
+                    candidates += ProbTestCandidate(profile.name, profile.source)
+                }
             }
         }
 

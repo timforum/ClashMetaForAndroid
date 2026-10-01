@@ -2,8 +2,10 @@ package com.github.kr328.clash.design.component
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.view.View
 import com.github.kr328.clash.common.compat.getDrawableCompat
 import com.github.kr328.clash.design.store.UiStore
@@ -19,6 +21,16 @@ class ProxyView(
 
     var state: ProxyViewState? = null
     constructor(context: Context) : this(context, ProxyViewConfig(context, 2))
+
+    override fun onFocusChanged(
+        gainFocus: Boolean,
+        direction: Int,
+        previouslyFocusedRect: Rect?,
+    ) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+
+        invalidate()
+    }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val state = state ?: return super.onMeasure(widthMeasureSpec, heightMeasureSpec)
 
@@ -191,5 +203,48 @@ class ProxyView(
 
             drawText(state.subtitle, 0, subtitleCount, x, y, paint)
         }
+
+        if (!isFocused)
+            return
+
+        // The stock ripple background only answers presses, so a remote that
+        // merely moves focus would leave the screen looking untouched - the
+        // click of the focus move is then the only sign anything happened.
+        drawFocusRing(canvas, state)
+    }
+
+    private fun drawFocusRing(canvas: Canvas, state: ProxyViewState) {
+        val config = state.config
+        val inset = config.layoutPadding + config.focusStrokeWidth / 2f
+        val right = width - inset
+        val bottom = height - inset
+
+        if (right <= inset || bottom <= inset)
+            return
+
+        val paint = state.paint
+
+        paint.reset()
+
+        paint.isAntiAlias = true
+        paint.strokeWidth = config.focusStrokeWidth
+
+        val radius = if (config.proxyLine == 1) 0f else config.cardRadius
+
+        // controls tracks the selection immediately, unlike background which
+        // animates towards it, so the ring is legible even mid-transition.
+        paint.color = Color.argb(
+            config.focusFillAlpha,
+            Color.red(state.controls),
+            Color.green(state.controls),
+            Color.blue(state.controls),
+        )
+
+        canvas.drawRoundRect(inset, inset, right, bottom, radius, radius, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.color = state.controls
+
+        canvas.drawRoundRect(inset, inset, right, bottom, radius, radius, paint)
     }
 }

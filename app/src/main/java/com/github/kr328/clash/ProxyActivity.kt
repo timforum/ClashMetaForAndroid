@@ -1,5 +1,6 @@
 package com.github.kr328.clash
 
+import android.view.KeyEvent
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.Proxy
@@ -13,6 +14,15 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 class ProxyActivity : BaseActivity<ProxyDesign>() {
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Taken here rather than from a focused view so it works whichever part
+        // of the screen the remote happens to be sitting on.
+        if (design?.handlePageKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN) == true)
+            return true
+
+        return super.dispatchKeyEvent(event)
+    }
+
     override suspend fun main() {
         val mode = withClash { queryOverride(Clash.OverrideSlot.Session).mode }
         val names = withClash { queryProxyGroupNames(uiStore.proxyExcludeNotSelectable) }

@@ -29,6 +29,12 @@ subprojects {
 
     val isApp = name == "app"
 
+    // Only app (manifest/Tileservice) and design (layouts) consume these two
+    // labels. They are emitted as a *reference* into the source strings, so any
+    // module that lacks those strings fails resource linking - hideapi, which
+    // has no res/ at all, always did.
+    val needsAppLabels = isApp || name == "design"
+
     apply(plugin = if (isApp) "com.android.application" else "com.android.library")
 
     fun queryConfigProperty(key: String): Any? {
@@ -108,8 +114,10 @@ subprojects {
 
                 buildConfigField("boolean", "PREMIUM", "Boolean.parseBoolean(\"false\")")
 
-                resValue("string", "launch_name", "@string/launch_name_alpha")
-                resValue("string", "application_name", "@string/application_name_alpha")
+                if (needsAppLabels) {
+                    resValue("string", "launch_name", "@string/launch_name_alpha")
+                    resValue("string", "application_name", "@string/application_name_alpha")
+                }
 
                 if (isApp && !removeSuffix) {
                     applicationIdSuffix = ".alpha"
@@ -125,8 +133,10 @@ subprojects {
 
                 buildConfigField("boolean", "PREMIUM", "Boolean.parseBoolean(\"false\")")
 
-                resValue("string", "launch_name", "@string/launch_name_meta")
-                resValue("string", "application_name", "@string/application_name_meta")
+                if (needsAppLabels) {
+                    resValue("string", "launch_name", "@string/launch_name_meta")
+                    resValue("string", "application_name", "@string/application_name_meta")
+                }
 
                 if (isApp && !removeSuffix) {
                     applicationIdSuffix = ".meta"

@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import com.github.kr328.clash.common.Global
+import com.github.kr328.clash.service.data.Database
 
 class StatusProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
@@ -17,6 +18,14 @@ class StatusProvider : ContentProvider() {
                     }
                 else
                     null
+            }
+            // A restore overwrites profiles.db while this process is the one
+            // holding it open, so the connection has to be dropped from here:
+            // the caller lives in another process and cannot reach it.
+            METHOD_RESET_DATABASE -> {
+                Database.reset()
+
+                Bundle()
             }
             else -> super.call(method, arg, extras)
         }
@@ -59,6 +68,7 @@ class StatusProvider : ContentProvider() {
 
     companion object {
         const val METHOD_CURRENT_PROFILE = "currentProfile"
+        const val METHOD_RESET_DATABASE = "resetProfileDatabase"
 
         private const val CLASH_SERVICE_RUNNING_FILE = "service_running.lock"
 
