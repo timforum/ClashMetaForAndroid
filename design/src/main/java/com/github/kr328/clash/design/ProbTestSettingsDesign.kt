@@ -106,12 +106,32 @@ class ProbTestSettingsDesign(
     }
 
     /**
-     * Paints whatever the worker left behind, so opening this screen during a
-     * round shows where it has got to rather than an empty page.
+     * Paints whatever the worker left behind.
+     *
+     * [ServiceStore.probtestState] holds the latest in-flight snapshot, but the
+     * worker clears [ServiceStore.probtestLastResult] the moment a new round
+     * starts and rewrites it when one finishes. That makes the last result a
+     * reliable "is a round actually running" signal: when it is set, no round
+     * is in flight, so [probtestState] is a stale leftover from a round that
+     * already ended (its finish broadcast simply never reached a screen that
+     * was open) and must not be repainted as a live bar. When the last result
+     * is blank a round really is running, so the in-flight snapshot is shown.
      */
     fun restoreProgress() {
-        val stored = ServiceStore(context).probtestState
-        val progress = ProbTestProgress.decode(stored)
+        val store = ServiceStore(context)
+
+        val lastResult = store.probtestLastResult
+        if (lastResult.isNotEmpty()) {
+            val separator = lastResult.indexOf('|')
+            val published = separator > 0 && lastResult.substring(0, separator) == "true"
+            val summary = if (separator >= 0) lastResult.substring(separator + 1) else lastResult
+
+            showResult(published, summary)
+
+            return
+        }
+
+        val progress = ProbTestProgress.decode(store.probtestState)
 
         if (progress == null) {
             hideProgress()

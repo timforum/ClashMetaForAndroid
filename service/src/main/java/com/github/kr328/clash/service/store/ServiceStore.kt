@@ -157,6 +157,18 @@ class ServiceStore(context: Context) {
         defaultValue = ""
     )
 
+    /**
+     * The outcome of the last finished round, encoded as
+     * `published|summary`. The worker writes it when a round ends and clears
+     * it when a new one starts, so a screen that opens between rounds can show
+     * the previous result instead of a stale in-flight snapshot that
+     * [probtestState] may still hold. Empty means no round has finished yet.
+     */
+    var probtestLastResult by store.string(
+        key = "probtest_last_result",
+        defaultValue = ""
+    )
+
     // WebDAV backup destination. The base URL must end with "/" when a remote
     // path is also given; the final file name is appended by the backup manager.
     var webdavUrl by store.string(

@@ -42,6 +42,12 @@ class ProbTestWorker : BaseService() {
         createChannels()
         foreground()
 
+        // A round is about to run, so whatever the previous one left on screen
+        // is now stale. Drop it immediately rather than letting the settings
+        // screen repaint a finished round's result for the whole duration of
+        // this one.
+        ServiceStore(applicationContext).probtestLastResult = ""
+
         launch {
             delay(TimeUnit.SECONDS.toMillis(10))
 
@@ -107,6 +113,11 @@ class ProbTestWorker : BaseService() {
             // Carried through the finally so a failure of any kind still
             // reports a reason on screen instead of just hiding the bar.
             sendProbTestFinished(didPublish, summary)
+
+            // Left behind so a screen opened between rounds shows this result
+            // rather than a stale in-flight snapshot. The "|" separator is
+            // safe: summary is a fixed app string and never contains it.
+            ServiceStore(applicationContext).probtestLastResult = "$didPublish|$summary"
 
             ProbTestReceiver.scheduleNext(this)
         }
