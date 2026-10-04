@@ -448,6 +448,14 @@
     <string name="backup_restored">Restored %1$d files</string>
     <string name="backup_uploaded">Uploaded %1$s</string>
     <string name="backup_failed">Backup failed: %1$s</string>
+    <!-- Each operation reports under its own name. A restore that dies listing
+         the server used to be announced as a failed backup, which sent the
+         reader looking in the wrong place entirely. -->
+    <string name="backup_restore_failed">Restore failed: %1$s</string>
+    <string name="backup_webdav_connect_failed">WebDAV connection failed: %1$s</string>
+    <!-- 127.0.0.0/8 is bound to the loopback interface, so such an address is
+         the phone itself on every device and never the server. -->
+    <string name="backup_webdav_loopback">The server address %1$s points at the phone itself. On Android the whole 127.0.0.0/8 range is local, so this never reaches a server. Use the address the phone can see, such as the machine\'s LAN or VPN IP.</string>
     <string name="backup_records_empty">No records yet</string>
     <string name="backup_webdav_not_configured">Configure the WebDAV server first</string>
     <string name="backup_webdav_verify">Test connection</string>

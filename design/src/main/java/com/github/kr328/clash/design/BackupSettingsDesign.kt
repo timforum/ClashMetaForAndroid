@@ -15,6 +15,7 @@ import com.github.kr328.clash.design.util.bindAppBarElevation
 import com.github.kr328.clash.design.util.layoutInflater
 import com.github.kr328.clash.design.util.root
 import com.github.kr328.clash.service.backup.BackupManager
+import com.github.kr328.clash.service.backup.BackupManager.WebdavLoopbackException
 import com.github.kr328.clash.service.backup.BackupRecord
 import com.github.kr328.clash.service.backup.BackupRecordStore
 import com.github.kr328.clash.service.store.ServiceStore
@@ -133,6 +134,21 @@ class BackupSettingsDesign(
         indicator.view.visibility = View.GONE
     }
 
+    /**
+     * Renders a failure under the name of the operation that actually failed.
+     *
+     * Every operation used to report as "Backup failed", so a restore that died
+     * listing the server announced itself as a backup problem and pointed the
+     * reader at the wrong half of the screen. [prefix] carries the name of the
+     * operation; a loopback server address replaces the message entirely,
+     * because the underlying connect error ("failed to connect to /127.x.x.x")
+     * says nothing a user can act on.
+     */
+    private fun failureText(prefix: Int, e: Throwable): String = when (e) {
+        is WebdavLoopbackException -> context.getString(R.string.backup_webdav_loopback, e.host)
+        else -> context.getString(prefix, e.message ?: e.toString())
+    }
+
     private fun run(message: String, block: suspend () -> String?) {
         showWorking(message)
 
@@ -149,7 +165,7 @@ class BackupSettingsDesign(
                 },
                 onFailure = {
                     Log.w("backup: $message failed", it)
-                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                    showResult(failureText(R.string.backup_failed, it))
                 },
             )
         }
@@ -188,9 +204,7 @@ class BackupSettingsDesign(
                 },
                 onFailure = {
                     Log.w("backup: restore failed", it)
-                    showResult(
-                        context.getString(R.string.backup_failed, it.message ?: it.toString())
-                    )
+                    showResult(failureText(R.string.backup_restore_failed, it))
                 },
             )
 
@@ -314,7 +328,7 @@ class BackupSettingsDesign(
                 },
                 onFailure = {
                     Log.w("backup: webdav verify failed", it)
-                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                    showResult(failureText(R.string.backup_webdav_connect_failed, it))
                 },
             )
         }
@@ -378,7 +392,7 @@ class BackupSettingsDesign(
                 },
                 onFailure = {
                     Log.w("backup: webdav list failed", it)
-                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                    showResult(failureText(R.string.backup_webdav_connect_failed, it))
                 },
             )
         }
@@ -446,7 +460,7 @@ class BackupSettingsDesign(
                 },
                 onFailure = {
                     Log.w("backup: webdav restore list failed", it)
-                    showResult(context.getString(R.string.backup_failed, it.message ?: it.toString()))
+                    showResult(failureText(R.string.backup_webdav_connect_failed, it))
                 },
             )
         }

@@ -23,6 +23,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.Proxy
 import java.text.SimpleDateFormat
 import java.util.Base64
 import java.util.Date
@@ -392,6 +393,44 @@ class BackupManager(private val context: Context) {
 
     data class WebdavTarget(val url: String, val username: String, val password: String, val path: String)
 
+    /**
+     * Raised when the configured server address is a loopback address.
+     *
+     * The whole of `127.0.0.0/8` is bound to the loopback interface, so on a
+     * phone such a host is the phone itself and never the server: the connect
+     * fails with nothing listening, and OkHttp reports only
+     * `failed to connect to /127.x.x.x`, which reads like a network outage and
+     * sends the reader looking in the wrong place. It is carried as a type
+     * rather than a message because the service module cannot reach the
+     * localized text; the settings screen turns it into one.
+     */
+    class WebdavLoopbackException(val host: String) : Exception(host)
+
+    /**
+     * Whether [host] names this device rather than the server.
+     *
+     * An IPv4 loopback address is not limited to `127.0.0.1`: the entire
+     * `127.0.0.0/8` block routes to `lo`, so every one of them is local. A
+     * hostname that resolves into that block is caught too, which is why this
+     * runs against the resolved host and not just the configured text.
+     */
+    private fun isLoopbackHost(host: String): Boolean {
+        val bare = host.removePrefix("[").removeSuffix("]")
+
+        if (bare.equals("localhost", ignoreCase = true)) return true
+        if (bare == "::1" || bare == "0:0:0:0:0:0:0:1") return true
+
+        val octets = bare.split('.')
+        if (octets.size == 4) {
+            val first = octets.first().toIntOrNull()
+            val rest = octets.drop(1).map { it.toIntOrNull() }
+
+            if (first != null && rest.all { it != null && it in 0..255 } && first == 127) return true
+        }
+
+        return false
+    }
+
     val store: ServiceStore
         get() = ServiceStore(context)
 
@@ -414,6 +453,17 @@ class BackupManager(private val context: Context) {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
+            // Backup and restore reach the server directly, whatever the
+            // system is doing. With the VPN's system proxy switched on, OkHttp
+            // would follow ProxySelector and send every request through that
+            // proxy first; a server that cannot be reached through it then
+            // reports a failure to connect to the proxy's own address rather
+            // than anything about the WebDAV server, and the backup dies on a
+            // proxy the operation has no reason to depend on. Backing up
+            // configurations is a maintenance task, not traffic that gains
+            // anything from being tunneled, so the proxy is ignored outright
+            // rather than made optional.
+            .proxy(Proxy.NO_PROXY)
             // Redirects are carried by hand below so the method and body of
             // PUT/PROPFIND survive them unchanged.
             .followRedirects(false)
@@ -441,6 +491,14 @@ class BackupManager(private val context: Context) {
     ): DavResponse {
         var current = url
         var redirects = 0
+
+        // Checked before the first request rather than after it fails: the
+        // connect error this avoids is indistinguishable from a server that is
+        // merely down, and one round trip per operation is wasted on a host
+        // that can never answer.
+        if (isLoopbackHost(current.toHttpUrl().host)) {
+            throw WebdavLoopbackException(current.toHttpUrl().host)
+        }
 
         while (true) {
             val mediaType = when {
