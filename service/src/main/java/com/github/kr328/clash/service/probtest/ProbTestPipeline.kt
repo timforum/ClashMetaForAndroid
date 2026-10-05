@@ -125,6 +125,17 @@ class ProbTestPipeline(private val context: Context) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
 
+        // Read before downloading anything: a round whose routing policy cannot
+        // be assembled is a round that would have to publish something the
+        // reader was never promised, and that is cheaper to report now than
+        // after every candidate has been fetched.
+        val template = try {
+            withContext(Dispatchers.IO) { TemplateAssets.read(context) }
+        } catch (e: Exception) {
+            Log.w("probtest template unreadable", e)
+            return ProbTestOutcome(false, e.message ?: "The screening template is missing")
+        }
+
         val documents = mutableListOf<String>()
         for ((index, candidate) in candidates.withIndex()) {
             fetch(candidate.url)?.let { documents += it }
@@ -143,6 +154,8 @@ class ProbTestPipeline(private val context: Context) {
             testUrl = "",
             rounds = ROUNDS,
             roundGapMs = store.probtestRoundGapSeconds.coerceAtLeast(0L) * 1000L,
+            templateIni = template.ini,
+            ruleFiles = template.ruleFiles,
         )
 
         val envelope = Clash.probTest(documents, options) { progress ->
@@ -172,13 +185,15 @@ class ProbTestPipeline(private val context: Context) {
         onProgress(ProbTestProgress(stage = Stage.PUBLISHING, total = survived))
 
         if (useService) {
-            val document = envelope.proxiesDocument
-                ?: return ProbTestOutcome(false, "Screening produced no publishable nodes", report)
-
+            // The whole configuration is uploaded, not the bare node list. The
+            // template has already decided which groups the survivors fill and
+            // where every rule set sends its traffic, so handing over only the
+            // proxies would discard that work and leave the service rebuilding
+            // a layout of its own.
             val destination = uploadTo(
                 url = uploadUrl,
                 token = store.probtestUploadToken.trim(),
-                document = document,
+                document = configuration,
             )
 
             return ProbTestOutcome(
@@ -205,11 +220,6 @@ class ProbTestPipeline(private val context: Context) {
         )
     }
 
-    /**
-     * Hands the surviving nodes to an endpoint that merges them into its own
-     * pool. Only the node list is sent: the caller of such an endpoint usually
-     * builds its own groups and rules around whatever it receives.
-     */
     /**
      * Rewrites a cleartext URL to https before it is ever used.
      *

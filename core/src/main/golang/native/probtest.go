@@ -37,6 +37,13 @@ type probTestRequest struct {
 	RoundTimeoutMs int64  `json:"roundTimeoutMs"`
 	Concurrency    int    `json:"concurrency"`
 	ExpectStatus   string `json:"expectStatus"`
+	// TemplateINI is the subconverter style template that decides which groups
+	// the surviving nodes fill and where each rule set goes. Empty keeps the
+	// fixed built in layout, so a caller without a template still publishes.
+	TemplateINI string `json:"templateIni,omitempty"`
+	// RuleFiles holds the rule files the template's ruleset lines name, keyed
+	// by the file name their URLs end in.
+	RuleFiles map[string]string `json:"ruleFiles,omitempty"`
 }
 
 func (r probTestRequest) options() probtest.Options {
@@ -48,6 +55,22 @@ func (r probTestRequest) options() probtest.Options {
 		Concurrency:  r.Concurrency,
 		ExpectStatus: r.ExpectStatus,
 	}
+}
+
+// template parses the template the request carried, or reports nil when it
+// carried none. A template is only ever parsed here, so a round never has to
+// notice that one arrived malformed: it fails before probing starts.
+func (r probTestRequest) template() (*probtest.Template, error) {
+	if r.TemplateINI == "" {
+		return nil, nil
+	}
+
+	files := make(map[string][]byte, len(r.RuleFiles))
+	for name, content := range r.RuleFiles {
+		files[name] = []byte(content)
+	}
+
+	return probtest.ParseTemplate([]byte(r.TemplateINI), files)
 }
 
 func durationMs(ms int64) time.Duration {
@@ -103,6 +126,14 @@ func runProbTest(callback unsafe.Pointer, candidates, options C.c_string) (out *
 		})
 	}
 
+	tpl, tplErr := req.template()
+	if tplErr != nil {
+		return marshalJson(probTestEnvelope{
+			OK:    false,
+			Error: fmt.Sprintf("invalid template: %v", tplErr),
+		})
+	}
+
 	docs := make([][]byte, 0, len(rawCandidates))
 	for _, c := range rawCandidates {
 		docs = append(docs, []byte(c))
@@ -117,10 +148,13 @@ func runProbTest(callback unsafe.Pointer, candidates, options C.c_string) (out *
 		})
 	}
 
+	opt := req.options()
+	opt.Template = tpl
+
 	res, err := probtest.Run(
 		context.Background(),
 		merged,
-		req.options(),
+		opt,
 		func(p probtest.Progress) {
 			C.fetch_report(callback, marshalJson(p))
 		},

@@ -283,7 +283,7 @@ func TestRunFiltersAndExportsCompleteConfig(t *testing.T) {
 	}
 
 	// the published document must itself parse
-	if err := verify(res.YAML, keepSet("good-node")); err != nil {
+	if err := verify(res.YAML, keepSet("good-node"), policyAuto); err != nil {
 		t.Errorf("verify: %v", err)
 	}
 }

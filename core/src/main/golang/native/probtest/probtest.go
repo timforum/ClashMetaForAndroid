@@ -25,6 +25,11 @@ type Options struct {
 	// ExpectStatus, when non-empty, restricts the accepted HTTP status
 	// (e.g. "204"). Empty accepts any status.
 	ExpectStatus string
+	// Template, when set, decides which groups the surviving nodes fill and
+	// where each rule set sends its traffic. A round given none publishes the
+	// fixed built in layout instead, which is what a caller that has no
+	// template to offer still gets.
+	Template *Template
 }
 
 const (
@@ -227,12 +232,12 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 		return &Result{Report: report}, fmt.Errorf("no node passed %d/%d rounds", opt.Rounds, opt.Rounds)
 	}
 
-	out, err := rewrite(root, kept)
+	out, err := rewrite(root, kept, opt.Template)
 	if err != nil {
 		return &Result{Report: report}, err
 	}
 
-	if err := verify(out, kept); err != nil {
+	if err := verify(out, kept, requiredGroup(opt.Template)); err != nil {
 		return &Result{Report: report}, fmt.Errorf("rewritten config failed verification: %w", err)
 	}
 

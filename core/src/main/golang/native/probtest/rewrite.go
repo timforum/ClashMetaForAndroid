@@ -32,10 +32,26 @@ var publishedOnlyKeys = []string{
 // rewrite builds a complete, loadable Clash configuration that keeps only the
 // surviving nodes.
 //
-// The group list and the rule targets are both rebuilt rather than inherited,
-// so the published configuration is one that routes the way the screening
-// intends no matter what the source subscription looked like.
-func rewrite(root map[string]any, keep map[string]struct{}) ([]byte, error) {
+// A round given a template takes its group and rule layout from the template;
+// a round given none keeps the fixed built in layout. Either way the layout is
+// rebuilt rather than inherited, so the published configuration routes the way
+// the screening intends no matter what the source subscription looked like.
+func rewrite(root map[string]any, keep map[string]struct{}, tpl *Template) ([]byte, error) {
+	out, err := narrowToSurvivors(root, keep)
+	if err != nil {
+		return nil, err
+	}
+
+	if tpl != nil {
+		return rewriteFromTemplate(out, keep, tpl)
+	}
+
+	return rewriteFromFixedLayout(out, keep)
+}
+
+// narrowToSurvivors copies the source configuration, keeps only the surviving
+// nodes in it, and strips what a published document must not carry.
+func narrowToSurvivors(root map[string]any, keep map[string]struct{}) (map[string]any, error) {
 	proxies, err := filterProxies(root["proxies"], keep)
 	if err != nil {
 		return nil, err
@@ -55,6 +71,11 @@ func rewrite(root map[string]any, keep map[string]struct{}) ([]byte, error) {
 		delete(out, k)
 	}
 
+	return out, nil
+}
+
+// rewriteFromFixedLayout applies the built in four group layout and rule list.
+func rewriteFromFixedLayout(out map[string]any, keep map[string]struct{}) ([]byte, error) {
 	// Everything a published rule is allowed to point at. A rule naming
 	// anything else named a group in the source subscription, which is not
 	// being published, so it is redirected to Auto rather than left dangling.
@@ -70,9 +91,48 @@ func rewrite(root map[string]any, keep map[string]struct{}) ([]byte, error) {
 
 	out["rules"] = rewriteRules()
 
-	if subRules, ok := root["sub-rules"]; ok {
+	if subRules, ok := out["sub-rules"]; ok {
 		out["sub-rules"] = rewriteSubRules(subRules, allowed)
 	}
+
+	return yaml.Marshal(out)
+}
+
+// rewriteFromTemplate applies a parsed template in place of the built in
+// layout: the groups the surviving nodes fill, the rule providers carrying the
+// rule files, and the rules that join them.
+//
+// sub-rules go rather than being rewritten. They belong to the source
+// subscription, which is not what the published configuration routes, and the
+// template defines none of its own, so keeping them would publish a structure
+// no rule reads.
+func rewriteFromTemplate(out map[string]any, keep map[string]struct{}, tpl *Template) ([]byte, error) {
+	groups, rules, providers, err := tpl.Render(keep)
+	if err != nil {
+		return nil, err
+	}
+
+	// A published rule may only name something the document actually holds:
+	// mihomo's built in targets, or a group the template wrote. A group the
+	// template dropped is absent from the output, so naming it would dangle.
+	allowed := make(map[string]bool, len(builtinTargets)+len(groups))
+	for name := range builtinTargets {
+		allowed[name] = true
+	}
+	for _, entry := range groups {
+		if m, ok := entry.(map[string]any); ok {
+			if name, ok := m["name"].(string); ok {
+				allowed[name] = true
+			}
+		}
+	}
+
+	out["proxy-groups"] = groups
+	out["rules"] = rules
+	if len(providers) > 0 {
+		out["rule-providers"] = providers
+	}
+	delete(out, "sub-rules")
 
 	return yaml.Marshal(out)
 }
@@ -265,7 +325,24 @@ func rewriteSubRules(raw any, alive map[string]bool) any {
 	return out
 }
 
-func verify(out []byte, keep map[string]struct{}) error {
+// requiredGroup is the group a published document must contain for its rules
+// to reach anywhere: the built in Auto for the fixed layout, the template's
+// catch all for a templated one.
+func requiredGroup(tpl *Template) string {
+	if tpl == nil {
+		return policyAuto
+	}
+
+	return tpl.Final
+}
+
+// verify checks a published document against the set of nodes it should hold
+// and the one group that has to be there for its rules to reach anywhere.
+//
+// required names that group. The built in layout sends its rules to Auto; a
+// template sends them to whatever its []FINAL ruleset names, so requiring Auto
+// of a templated document would reject a correct one.
+func verify(out []byte, keep map[string]struct{}, required string) error {
 	root, err := decodeRoot(out)
 	if err != nil {
 		return err
@@ -332,10 +409,12 @@ func verify(out []byte, keep map[string]struct{}) error {
 		alive[name] = true
 	}
 
-	// Auto is where the published rules send traffic. A configuration without
-	// it would load and then match everything onto a target that is not there.
-	if !groupNames[policyAuto] {
-		return fmt.Errorf("published configuration has no %q group", policyAuto)
+	// The rules have to reach a group that exists. Auto is where the built in
+	// rules send traffic and a template's []FINAL group is where a templated
+	// one sends it; a document without that group loads and then matches
+	// everything onto a target that is not there.
+	if required != "" && !groupNames[required] {
+		return fmt.Errorf("published configuration has no %q group", required)
 	}
 
 	if groups, ok := root["proxy-groups"].([]any); ok {

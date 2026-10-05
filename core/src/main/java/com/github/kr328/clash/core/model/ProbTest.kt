@@ -17,6 +17,18 @@ data class ProbTestOptions(
     @SerialName("roundTimeoutMs") val roundTimeoutMs: Long = 10_000,
     val concurrency: Int = 16,
     val expectStatus: String = "",
+    /**
+     * The subconverter style template that decides which groups the surviving
+     * nodes fill and where each rule set sends its traffic. Empty keeps the
+     * fixed built in layout the core publishes when no template is offered.
+     */
+    @SerialName("templateIni") val templateIni: String = "",
+    /**
+     * The rule files the template's ruleset lines name, keyed by the file name
+     * their URLs end in. Referenced but absent files fail the round in the core
+     * rather than being skipped here, so a partial bundle is never published.
+     */
+    @SerialName("ruleFiles") val ruleFiles: Map<String, String> = emptyMap(),
 )
 
 /** Emitted once per round while a probe is running. */
