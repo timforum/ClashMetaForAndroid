@@ -30,6 +30,10 @@ type Options struct {
 	// fixed built in layout instead, which is what a caller that has no
 	// template to offer still gets.
 	Template *Template
+	// SpeedTest, when enabled, requires every survivor of the latency rounds
+	// to also carry real traffic: reach YouTube through the exit and sustain
+	// a floor of throughput. Nodes that fail either are not published.
+	SpeedTest SpeedOptions
 }
 
 const (
@@ -50,6 +54,11 @@ type Node struct {
 	Passes int    `json:"passes"`
 	Delays []int  `json:"delays"`
 	Error  string `json:"error,omitempty"`
+	// SpeedMbps and SpeedTier are filled for nodes that cleared the speed
+	// gate. An empty tier means the gate did not run or the node never got
+	// that far.
+	SpeedMbps float64 `json:"speedMbps,omitempty"`
+	SpeedTier string  `json:"speedTier,omitempty"`
 	// Rejected marks nodes that were never probed because they failed
 	// pre-validation (a node that cannot be parsed safely).
 	Rejected bool `json:"rejected,omitempty"`
@@ -82,7 +91,11 @@ func (r *Report) normalize() {
 
 // Progress is emitted once per round while a run is in flight.
 type Progress struct {
-	Round     int   `json:"round"`
+	// Stage names the phase a run is in: empty for the latency rounds,
+	// StageSpeedTest for the throughput gate. Empty keeps the wire format
+	// unchanged for a caller compiled before the gate existed.
+	Stage string `json:"stage,omitempty"`
+	Round int   `json:"round"`
 	Rounds    int   `json:"rounds"`
 	ElapsedMs int64 `json:"elapsedMs"`
 	// Passed counts nodes that have not failed yet and will be probed again.
@@ -90,6 +103,10 @@ type Progress struct {
 	Failed   int `json:"failed"`
 	Total    int `json:"total"`
 	Rejected int `json:"rejected"`
+	// Done counts nodes finished within the current stage. The latency
+	// rounds report at round boundaries, where done equals round, so it stays
+	// empty there.
+	Done int `json:"done,omitempty"`
 }
 
 // Result is the outcome of Run.
@@ -212,14 +229,37 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 		return nil, err
 	}
 
+	// The gate runs after the latency rounds and before anything is built
+	// from the survivors, so a node that cannot carry video never reaches a
+	// published group. With the gate off this is the identity function.
+	if opt.SpeedTest.Enabled {
+		survivors = speedGate(ctx, survivors, opt, func(p Progress) {
+			if onProgress == nil {
+				return
+			}
+			p.Total = report.Total
+			p.Rejected = report.Rejected
+			onProgress(p)
+		})
+	}
+
 	report.ElapsedMs = time.Since(started).Milliseconds()
 
+	// Every node gets its outcome copied, not just the survivors: the
+	// result file is the only record left once logcat rotates, and a dropped
+	// node whose lastErr never reaches the report looks exactly like a node
+	// nobody tested.
 	kept := make(map[string]struct{}, len(survivors))
 	for _, n := range survivors {
 		kept[n.name] = struct{}{}
+	}
+
+	for _, n := range nodes {
 		if i, ok := pos[n.name]; ok {
 			report.Nodes[i].Passes = n.passes
 			report.Nodes[i].Delays = n.delays
+			report.Nodes[i].SpeedMbps = n.speedMbps
+			report.Nodes[i].SpeedTier = n.speedTier
 			if n.lastErr != "" {
 				report.Nodes[i].Error = n.lastErr
 			}
@@ -229,6 +269,9 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 	report.normalize()
 
 	if len(kept) == 0 {
+		if opt.SpeedTest.Enabled {
+			return &Result{Report: report}, fmt.Errorf("no node passed the speed gate")
+		}
 		return &Result{Report: report}, fmt.Errorf("no node passed %d/%d rounds", opt.Rounds, opt.Rounds)
 	}
 

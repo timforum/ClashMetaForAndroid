@@ -70,6 +70,21 @@ class ProbTestSettingsDesign(
                     indicator.setIndeterminate()
                 }
             }
+            Stage.SPEED_TEST -> {
+                if (state.total > 0) {
+                    indicator.summary = context.getString(
+                        R.string.probtest_progress_speed,
+                        state.done,
+                        state.total,
+                        state.passed,
+                        state.failed,
+                    )
+                    indicator.setProgress(state.done, state.total)
+                } else {
+                    indicator.summary = context.getString(R.string.probtest_speed)
+                    indicator.setIndeterminate()
+                }
+            }
             Stage.PUBLISHING -> {
                 indicator.summary = context.getString(R.string.probtest_publishing)
                 indicator.setIndeterminate()
@@ -181,6 +196,23 @@ class ProbTestSettingsDesign(
 
             // Sits directly under the switch so the effect of tapping "run a
             // round now" is visible where the tap happened.
+            clickable(
+                title = R.string.probtest_run_now,
+                icon = R.drawable.ic_baseline_replay,
+                summary = R.string.probtest_run_now_summary,
+                card = true,
+            ) {
+                clicked {
+                    requests.trySend(Request.RunNow)
+                }
+
+                // Deliberately not added to dependencies. A manual run has to
+                // work with the schedule switched off, otherwise the only way
+                // to test a configuration is to turn on a recurring job first.
+                // ProbTestWorker re-arms nothing in that case, so a one-off run
+                // does not silently start the interval.
+            }
+
             indicator = progress(R.string.probtest_status, card = true) {
                 view.visibility = View.GONE
             }
@@ -325,25 +357,6 @@ class ProbTestSettingsDesign(
                     dependencies.add(this)
                 },
             )
-
-            category(R.string.probtest_actions, card = true)
-
-            clickable(
-                title = R.string.probtest_run_now,
-                icon = R.drawable.ic_baseline_replay,
-                summary = R.string.probtest_run_now_summary,
-                card = true,
-            ) {
-                clicked {
-                    requests.trySend(Request.RunNow)
-                }
-
-                // Deliberately not added to dependencies. A manual run has to
-                // work with the schedule switched off, otherwise the only way
-                // to test a configuration is to turn on a recurring job first.
-                // ProbTestWorker re-arms nothing in that case, so a one-off run
-                // does not silently start the interval.
-            }
         }
 
         screen.shrinkText()

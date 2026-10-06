@@ -7,6 +7,7 @@ import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.ProbTestOptions
 import com.github.kr328.clash.core.model.ProbTestReport
+import com.github.kr328.clash.core.model.ProbTestSpeedTest
 import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.store.ServiceStore
@@ -20,6 +21,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
@@ -34,6 +36,7 @@ data class ProbTestCandidate(val name: String, val url: String)
 enum class Stage {
     DOWNLOADING,
     SCREENING,
+    SPEED_TEST,
     PUBLISHING,
 }
 
@@ -101,6 +104,23 @@ class ProbTestPipeline(private val context: Context) {
             .build()
     }
 
+    /**
+     * The gate's tunables live in `speedtest.json` in the app's external files
+     * directory, so a round can be re-tuned by editing the file instead of
+     * rebuilding the app. Blank stays at the built in defaults.
+     */
+    private fun readSpeedConfig(): String {
+        val file = File(context.getExternalFilesDir(null), "speedtest.json")
+        return try {
+            if (!file.exists()) "" else file.readText().also {
+                if (it.isNotBlank()) Log.i("probtest: speed config from ${file.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.w("probtest: cannot read speed config", e)
+            ""
+        }
+    }
+
     suspend fun run(onProgress: (ProbTestProgress) -> Unit = {}): ProbTestOutcome {
         val store = ServiceStore(context)
 
@@ -124,6 +144,12 @@ class ProbTestPipeline(private val context: Context) {
         if (candidates.isEmpty()) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
+
+        // The gate's tunables live in a JSON file on the device so a round
+        // can be re-tuned by editing the file instead of rebuilding. It wins
+        // over the built in defaults whenever present; a broken file fails
+        // the round instead of silently weakening the gate.
+        val speedConfig = readSpeedConfig()
 
         // Read before downloading anything: a round whose routing policy cannot
         // be assembled is a round that would have to publish something the
@@ -156,6 +182,8 @@ class ProbTestPipeline(private val context: Context) {
             roundGapMs = store.probtestRoundGapSeconds.coerceAtLeast(0L) * 1000L,
             templateIni = template.ini,
             ruleFiles = template.ruleFiles,
+            speedTest = ProbTestSpeedTest(enabled = true),
+            speedTestConfig = speedConfig,
         )
 
         val envelope = Clash.probTest(documents, options) { progress ->
@@ -163,13 +191,18 @@ class ProbTestPipeline(private val context: Context) {
 
             onProgress(
                 ProbTestProgress(
-                    stage = Stage.SCREENING,
+                    stage = when (progress.stage) {
+                        // The core reports the throughput gate by name; the
+                        // latency rounds arrive with no stage at all.
+                        "speedtest" -> Stage.SPEED_TEST
+                        else -> Stage.SCREENING
+                    },
                     round = progress.round,
                     rounds = progress.rounds,
                     passed = progress.passed,
                     failed = progress.failed,
                     total = progress.total,
-                    done = progress.round,
+                    done = progress.done,
                 )
             )
         }

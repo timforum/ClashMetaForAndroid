@@ -44,9 +44,58 @@ type probTestRequest struct {
 	// RuleFiles holds the rule files the template's ruleset lines name, keyed
 	// by the file name their URLs end in.
 	RuleFiles map[string]string `json:"ruleFiles,omitempty"`
+	// SpeedTest, when non-nil and enabled, gates the survivors of the latency
+	// rounds on real YouTube reachability and throughput.
+	SpeedTest *speedTestRequest `json:"speedTest,omitempty"`
+	// SpeedTestConfig carries the raw JSON of the speed gate's tunables, read
+	// from the config file on the device. When non-empty it wins over the
+	// structured fields above, so a round is retuned by editing the file
+	// rather than rebuilding the app.
+	SpeedTestConfig string `json:"speedTestConfig,omitempty"`
 }
 
-func (r probTestRequest) options() probtest.Options {
+// speedTestRequest is the wire form of probtest.SpeedOptions. Absent means
+// the gate does not run.
+type speedTestRequest struct {
+	Enabled     bool    `json:"enabled"`
+	FloorMbps   float64 `json:"floorMbps,omitempty"`
+	MaxBytes    int64   `json:"maxBytes,omitempty"`
+	MaxTimeMs   int64   `json:"maxTimeMs,omitempty"`
+	Concurrency int     `json:"concurrency,omitempty"`
+}
+
+func (r *speedTestRequest) options() probtest.SpeedOptions {
+	if r == nil {
+		return probtest.SpeedOptions{}
+	}
+	return probtest.SpeedOptions{
+		Enabled:     r.Enabled,
+		FloorMbps:   r.FloorMbps,
+		MaxBytes:    r.MaxBytes,
+		MaxTimeMs:   r.MaxTimeMs,
+		Concurrency: r.Concurrency,
+	}
+}
+
+// effectiveSpeedOptions resolves which gate configuration a round gets: the
+// config file's JSON when the device pushed one, otherwise the structured
+// fields the pipeline sent. A malformed file fails the round instead of
+// silently running with defaults.
+func (r probTestRequest) effectiveSpeedOptions() (probtest.SpeedOptions, error) {
+	if r.SpeedTestConfig != "" {
+		return probtest.ParseSpeedOptions(r.SpeedTestConfig)
+	}
+	return r.SpeedTest.options(), nil
+}
+
+func (r probTestRequest) options() (probtest.Options, error) {
+	st, err := r.effectiveSpeedOptions()
+	if err != nil {
+		// A malformed gate config must not quietly become the RTT-only
+		// default: that would publish nodes the reader was never promised
+		// were tested. Fail the round instead.
+		return probtest.Options{}, err
+	}
 	return probtest.Options{
 		TestURL:      r.TestURL,
 		Rounds:       r.Rounds,
@@ -54,7 +103,8 @@ func (r probTestRequest) options() probtest.Options {
 		RoundTimeout: durationMs(r.RoundTimeoutMs),
 		Concurrency:  r.Concurrency,
 		ExpectStatus: r.ExpectStatus,
-	}
+		SpeedTest:    st,
+	}, nil
 }
 
 // template parses the template the request carried, or reports nil when it
@@ -148,7 +198,13 @@ func runProbTest(callback unsafe.Pointer, candidates, options C.c_string) (out *
 		})
 	}
 
-	opt := req.options()
+	opt, err := req.options()
+	if err != nil {
+		return marshalJson(probTestEnvelope{
+			OK:    false,
+			Error: fmt.Sprintf("invalid speed config: %v", err),
+		})
+	}
 	opt.Template = tpl
 
 	res, err := probtest.Run(

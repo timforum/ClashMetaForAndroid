@@ -3,6 +3,8 @@ package com.github.kr328.clash.service
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Intent
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
 import androidx.core.app.NotificationChannelCompat
@@ -17,6 +19,7 @@ import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.service.probtest.ProbTestPipeline
 import com.github.kr328.clash.service.probtest.ProbTestProgress
 import com.github.kr328.clash.service.probtest.Stage
+import com.github.kr328.clash.core.model.ProbTestReport
 import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.service.util.sendProbTestFinished
 import com.github.kr328.clash.service.util.sendProbTestProgress
@@ -24,6 +27,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -78,6 +85,7 @@ class ProbTestWorker : BaseService() {
     private suspend fun run() {
         var didPublish = false
         var summary = getString(R.string.probtest_failure)
+        var report: ProbTestReport? = null
 
         try {
             val pipeline = ProbTestPipeline(this)
@@ -93,6 +101,7 @@ class ProbTestWorker : BaseService() {
 
             didPublish = outcome.published
             summary = outcome.summary
+            report = outcome.report
 
             if (didPublish) {
                 published(summary)
@@ -119,7 +128,46 @@ class ProbTestWorker : BaseService() {
             // safe: summary is a fixed app string and never contains it.
             ServiceStore(applicationContext).probtestLastResult = "$didPublish|$summary"
 
+            // Written to a file so the round's outcome can be read back
+            // without racing the logcat buffer: the gate's per-probe
+            // failure counts and every node's measured speed are in here.
+            writeResultFile(didPublish, summary, report)
+
             ProbTestReceiver.scheduleNext(this)
+        }
+    }
+
+    @Serializable
+    private data class RoundResult(
+        val timestamp: Long,
+        val published: Boolean,
+        val summary: String,
+        val report: ProbTestReport?,
+    )
+
+    /**
+     * Writes the round's outcome to `speedtest_result.json` in the app's
+     * external files directory, where it can be read back with
+     * `adb shell cat` without depending on the logcat buffer still
+     * holding the lines.
+     */
+    private fun writeResultFile(published: Boolean, summary: String, report: ProbTestReport?) {
+        try {
+            val file = File(getExternalFilesDir(null), "speedtest_result.json")
+            val json = Json { ignoreUnknownKeys = true }
+            file.writeText(
+                json.encodeToString(
+                    RoundResult.serializer(),
+                    RoundResult(
+                        timestamp = System.currentTimeMillis(),
+                        published = published,
+                        summary = summary,
+                        report = report,
+                    ),
+                ),
+            )
+        } catch (e: Exception) {
+            Log.w("probtest: cannot write result file", e)
         }
     }
 
@@ -128,6 +176,19 @@ class ProbTestWorker : BaseService() {
         // removes it shortly after, and repainting it here would show a fresh
         // spinner for a round that has already finished.
         ServiceStore(applicationContext).probtestState = ""
+    }
+
+    /**
+     * Plays the system notification sound once, so the speed gate landing is
+     * audible without depending on the media volume being up.
+     */
+    private fun playSpeedTestDone() {
+        try {
+            val uri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            RingtoneManager.getRingtone(applicationContext, uri)?.play()
+        } catch (e: Exception) {
+            Log.w("probtest: cannot play speed test sound", e)
+        }
     }
 
     private fun createChannels() {
@@ -176,7 +237,17 @@ class ProbTestWorker : BaseService() {
         val (current, total) = when (progress.stage) {
             Stage.DOWNLOADING -> progress.done to progress.total
             Stage.SCREENING -> progress.round to progress.rounds
+            Stage.SPEED_TEST -> progress.done to progress.total
             Stage.PUBLISHING -> 0 to 0
+        }
+
+        // The speed gate is the one phase a reader can walk away from: it
+        // runs for minutes after the latency rounds, and the outcome decides
+        // whether anything gets published at all. A sound when it lands is
+        // the difference between noticing the round finished and finding out
+        // hours later that it never did.
+        if (progress.stage == Stage.SPEED_TEST && progress.total > 0 && progress.done >= progress.total) {
+            playSpeedTestDone()
         }
 
         val notification = NotificationCompat.Builder(this, SERVICE_CHANNEL)
@@ -223,6 +294,17 @@ class ProbTestWorker : BaseService() {
             )
         } else {
             getString(R.string.probtest_screening)
+        }
+        Stage.SPEED_TEST -> if (progress.total > 0) {
+            getString(
+                R.string.probtest_progress_speed,
+                progress.done,
+                progress.total,
+                progress.passed,
+                progress.failed,
+            )
+        } else {
+            getString(R.string.probtest_speed)
         }
         Stage.PUBLISHING -> getString(R.string.probtest_publishing)
     }

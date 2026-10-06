@@ -24,6 +24,8 @@
     <string name="probtest_progress_downloading">Downloading subscriptions %1$d/%2$d</string>
     <string name="probtest_screening">Testing nodes</string>
     <string name="probtest_progress_screening">Round %1$d/%2$d — %3$d alive, %4$d failed</string>
+    <string name="probtest_speed">Testing whether the nodes can carry video</string>
+    <string name="probtest_progress_speed">Speed test %1$d/%2$d — %3$d pass, %4$d dropped</string>
     <string name="probtest_publishing">Publishing the surviving nodes</string>
     <string name="probtest_result">Subscription screening result</string>
     <string name="probtest_success">Screening completed</string>

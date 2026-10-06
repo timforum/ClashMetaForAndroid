@@ -19,6 +19,10 @@ type node struct {
 	delays  []int
 	failed  bool
 	lastErr string
+	// speedMbps and speedTier are set by the speed gate for nodes that
+	// cleared it.
+	speedMbps float64
+	speedTier string
 }
 
 // buildNode pre-validates a raw proxy entry and parses it. It returns a
@@ -185,23 +189,64 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			delay, err := probeOne(ctx, n, opt, expected)
+			// A dial that never answers must not hold a semaphore slot
+			// forever: sixteen of them is all it takes to deadlock the whole
+			// round, because no other node can start. URLTest is therefore
+			// run in its own goroutine behind a hard deadline of our own,
+			// which no transport can opt out of. The leaked dial behind a
+			// timed-out probe belongs to the node, not the round, so the
+			// node is failed and the round moves on.
+			res := make(chan probeResult, 1)
+			go func() {
+				delay, err := probeOne(ctx, n, opt, expected)
+				res <- probeResult{delay: delay, err: err}
+			}()
 
-			if err != nil {
-				n.passes = 0
-				n.failed = true
-				n.lastErr = err.Error()
-				return
+			timer := time.NewTimer(hardProbeCap(opt))
+			defer timer.Stop()
+
+			select {
+			case r := <-res:
+				applyProbe(n, r)
+			case <-ctx.Done():
+				markFailed(n, ctx.Err().Error())
+			case <-timer.C:
+				markFailed(n, "probe did not answer in time")
 			}
-
-			n.passes++
-			n.delays = append(n.delays, int(delay))
 		}(n)
 	}
 
 	wg.Wait()
 
 	return ctx.Err()
+}
+
+type probeResult struct {
+	delay uint16
+	err   error
+}
+
+// hardProbeCap bounds one node's turn no matter how deep the dial hangs.
+// RoundTimeout ends the probe cooperatively; the cap ends it regardless,
+// with enough slack for a legitimate probe that is winding down to finish.
+func hardProbeCap(opt Options) time.Duration {
+	return opt.RoundTimeout + 30*time.Second
+}
+
+func applyProbe(n *node, r probeResult) {
+	if r.err != nil {
+		markFailed(n, r.err.Error())
+		return
+	}
+	n.passes++
+	n.delays = append(n.delays, int(r.delay))
+}
+
+// markFailed records one failure of a node and takes it out of the running.
+func markFailed(n *node, reason string) {
+	n.passes = 0
+	n.failed = true
+	n.lastErr = reason
 }
 
 func probeOne(ctx context.Context, n *node, opt Options, expected utils.IntRanges[uint16]) (uint16, error) {

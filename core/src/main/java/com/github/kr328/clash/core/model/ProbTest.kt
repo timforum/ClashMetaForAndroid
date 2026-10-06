@@ -29,6 +29,33 @@ data class ProbTestOptions(
      * rather than being skipped here, so a partial bundle is never published.
      */
     @SerialName("ruleFiles") val ruleFiles: Map<String, String> = emptyMap(),
+    /**
+     * The real-transfer gate survivors must clear before publishing: reach
+     * YouTube through the exit and sustain a floor of throughput. Zero-valued
+     * fields mean the core defaults apply, so only [ProbTestSpeedTest.enabled]
+     * usually needs setting.
+     */
+    @SerialName("speedTest") val speedTest: ProbTestSpeedTest = ProbTestSpeedTest(),
+    /**
+     * Raw JSON of the speed gate's tunables, read from a config file on the
+     * device (e.g. `speedtest.json` in the app's external files directory).
+     * When present it wins over [speedTest], so the gate can be re-tuned
+     * between rounds without rebuilding the app.
+     */
+    @SerialName("speedTestConfig") val speedTestConfig: String = "",
+)
+
+/**
+ * Wire form of the speed gate. Empty numbers defer to the core's defaults
+ * rather than re-stating them here, so the two sides cannot drift apart.
+ */
+@Serializable
+data class ProbTestSpeedTest(
+    val enabled: Boolean = false,
+    @SerialName("floorMbps") val floorMbps: Double = 0.0,
+    @SerialName("maxBytes") val maxBytes: Long = 0,
+    @SerialName("maxTimeMs") val maxTimeMs: Long = 0,
+    val concurrency: Int = 0,
 )
 
 /** Emitted once per round while a probe is running. */
@@ -41,6 +68,13 @@ data class ProbTestProgress(
     val failed: Int,
     val total: Int,
     val rejected: Int,
+    /**
+     * The phase a run is in: empty for the latency rounds, "speedtest" for
+     * the throughput gate. Empty keeps an older core's events readable.
+     */
+    val stage: String = "",
+    /** Nodes finished within the current stage; zero on round boundaries. */
+    val done: Int = 0,
 )
 
 /** Outcome for a single candidate node. */
