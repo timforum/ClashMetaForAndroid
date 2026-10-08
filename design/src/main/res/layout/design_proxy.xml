@@ -58,23 +58,51 @@
                         android:layout_height="wrap_content"
                         android:layout_centerVertical="true"
                         android:layout_marginStart="@dimen/item_tailing_margin"
-                        android:layout_toStartOf="@id/menu_view">
+                        android:layout_toStartOf="@id/speed_test_layout"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="@drawable/bg_toolbar_icon_highlight"
+                        android:onClick="@{() -> self.requestUrlTesting()}">
 
                         <ImageView
                             android:id="@+id/url_test_view"
                             android:layout_width="@dimen/item_tailing_component_size"
                             android:layout_height="@dimen/item_tailing_component_size"
-                            android:layout_gravity="center"
-                            android:background="?attr/selectableItemBackgroundBorderless"
-                            android:clickable="true"
-                            android:contentDescription="@string/delay_test"
-                            android:focusable="true"
-                            android:onClick="@{() -> self.requestUrlTesting()}"
-                            android:padding="@dimen/toolbar_image_action_padding"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/delay_test"
+                        android:padding="@dimen/toolbar_image_action_padding"
                             android:src="@drawable/ic_baseline_flash_on" />
 
                         <ProgressBar
                             android:id="@+id/url_test_progress_view"
+                            android:layout_width="@dimen/item_tailing_component_size"
+                            android:layout_height="@dimen/item_tailing_component_size"
+                            android:visibility="gone" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:id="@+id/speed_test_layout"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_centerVertical="true"
+                        android:layout_marginStart="@dimen/item_tailing_margin"
+                        android:layout_toStartOf="@id/menu_view"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="@drawable/bg_toolbar_icon_highlight"
+                        android:onClick="@{() -> self.requestSpeedTest()}">
+
+                        <ImageView
+                            android:id="@+id/speed_test_view"
+                            android:layout_width="@dimen/item_tailing_component_size"
+                            android:layout_height="@dimen/item_tailing_component_size"
+                            android:layout_gravity="center"
+                            android:contentDescription="@string/speed_test"
+                            android:padding="@dimen/toolbar_image_action_padding"
+                            android:src="@drawable/ic_baseline_speed" />
+
+                        <ProgressBar
+                            android:id="@+id/speed_test_progress_view"
                             android:layout_width="@dimen/item_tailing_component_size"
                             android:layout_height="@dimen/item_tailing_component_size"
                             android:visibility="gone" />
@@ -87,7 +115,7 @@
                         android:layout_alignParentEnd="true"
                         android:layout_centerVertical="true"
                         android:layout_marginStart="@dimen/item_tailing_margin"
-                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:background="@drawable/bg_toolbar_icon_highlight"
                         android:clickable="true"
                         android:contentDescription="@string/more"
                         android:focusable="true"

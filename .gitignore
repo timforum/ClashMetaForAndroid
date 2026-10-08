@@ -64,3 +64,14 @@ google-services.json
 
 # MacOS
 .DS_Store
+
+# local build output
+/release
+
+# harness artifacts
+node_modules/
+package.json
+package-lock.json
+
+# token-bearing subscription template, lives in the private cf-converter repo
+_t2.mjs

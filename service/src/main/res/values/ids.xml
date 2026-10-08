@@ -4,4 +4,5 @@
     <item name="nf_vpn_status" type="id" />
     <item name="nf_profile_worker" type="id" />
     <item name="nf_probtest_worker" type="id" />
+    <item name="nf_speedtest_worker" type="id" />
 </resources>

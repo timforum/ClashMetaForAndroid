@@ -4,8 +4,14 @@ import android.view.KeyEvent
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.Proxy
+import com.github.kr328.clash.core.model.SpeedTestEnvelope
+import com.github.kr328.clash.core.model.SpeedTestJson
+import com.github.kr328.clash.core.model.SpeedTestOptions
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
+import com.github.kr328.clash.service.SpeedTestReceiver
+import com.github.kr328.clash.service.model.SpeedTestSelection
+import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -30,11 +36,16 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
         val unorderedStates = names.indices.map { names[it] to states[it] }.toMap()
         val reloadLock = Semaphore(10)
 
+        // Multi-process preferences: the toggle's set is read by the periodic
+        // worker in :background, so it cannot live in the UI-only ui store.
+        val serviceStore = ServiceStore(this)
+
         val design = ProxyDesign(
             this,
             mode,
             names,
-            uiStore
+            uiStore,
+            serviceStore
         )
 
         setContentDesign(design)
@@ -109,6 +120,32 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                                 design.requests.send(ProxyDesign.Request.Reload(it.index))
                             }
                         }
+                        is ProxyDesign.Request.SpeedTest -> {
+                            val index = it.index
+                            val group = names[index]
+                            val enabling = group !in serviceStore.speedTestGroups
+
+                            serviceStore.speedTestGroups =
+                                if (enabling)
+                                    serviceStore.speedTestGroups + group
+                                else
+                                    serviceStore.speedTestGroups - group
+
+                            if (enabling) {
+                                launch {
+                                    runSpeedTest(index, group, states, serviceStore, design)
+                                }
+                            } else {
+                                // Off means off: release the mark the toggle claimed,
+                                // and let the set decide whether a round is still due.
+                                design.setSpeedTestRunning(index, false)
+
+                                if (serviceStore.speedTestGroups.isEmpty())
+                                    SpeedTestReceiver.cancelNext(this@ProxyActivity)
+                                else
+                                    SpeedTestReceiver.scheduleNext(this@ProxyActivity)
+                            }
+                        }
                         is ProxyDesign.Request.PatchMode -> {
                             design.showModeSwitchTips()
 
@@ -123,6 +160,75 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Measures one group from the toolbar toggle: keeps the ranking for the
+     * periodic supervisor, then moves the selector onto the winner so the
+     * connection starts on the fastest node that passed.
+     *
+     * The running mark is released in a finally so a failure cannot leave the
+     * toolbar spinning; a failed run simply reports the toast and keeps the
+     * switch on, since the supervisor will retry it anyway.
+     */
+    private suspend fun runSpeedTest(
+        index: Int,
+        group: String,
+        states: List<ProxyState>,
+        store: ServiceStore,
+        design: ProxyDesign,
+    ) {
+        try {
+            val options = SpeedTestJson.encodeToString(
+                SpeedTestOptions.serializer(),
+                SpeedTestOptions()
+            )
+
+            val envelope = SpeedTestJson.decodeFromString(
+                SpeedTestEnvelope.serializer(),
+                withClash { speedTestGroup(group, options) }
+            )
+
+            val best = envelope.best
+
+            if (!envelope.ok || best.isNullOrEmpty()) {
+                design.showSpeedTestFailed()
+
+                return
+            }
+
+            val top = envelope.results.firstOrNull { r -> r.name == best }
+
+            store.setSpeedTestSelection(
+                group,
+                SpeedTestSelection(
+                    default = best,
+                    backup = envelope.backup.orEmpty(),
+                    mbps = top?.mbps ?: 0.0,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
+
+            if (states[index].now != best) {
+                withClash {
+                    patchSelector(group, best)
+                }
+
+                states[index].now = best
+
+                design.requestRedrawVisible()
+            }
+
+            // First round of the set is this one, already done; the supervisor
+            // takes over from here on the configured interval.
+            SpeedTestReceiver.scheduleNext(this)
+        } catch (e: Exception) {
+            design.showSpeedTestFailed()
+        } finally {
+            design.setSpeedTestRunning(index, false)
+
+            design.requests.send(ProxyDesign.Request.Reload(index))
         }
     }
 }

@@ -27,6 +27,10 @@ object Intents {
     val ACTION_PROBTEST_SCHEDULE = "$packageName.intent.action.PROBTEST_SCHEDULE"
     val ACTION_PROBTEST_PROGRESS = "$packageName.intent.action.PROBTEST_PROGRESS"
     val ACTION_PROBTEST_FINISHED = "$packageName.intent.action.PROBTEST_FINISHED"
+    val ACTION_SPEEDTEST_REQUEST = "$packageName.intent.action.SPEEDTEST_REQUEST"
+
+    // Group whose speed screening produced a progress or a result.
+    const val EXTRA_GROUP = "group"
 
     const val EXTRA_STOP_REASON = "stop_reason"
     const val EXTRA_UUID = "uuid"

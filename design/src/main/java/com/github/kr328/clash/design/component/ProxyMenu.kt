@@ -18,14 +18,36 @@ class ProxyMenu(
     private val uiStore: UiStore,
     private val requests: Channel<ProxyDesign.Request>,
     private val updateConfig: () -> Unit,
+    private val speedTestState: () -> Boolean?,
+    private val onSpeedTestToggle: () -> Unit,
 ) : PopupMenu.OnMenuItemClickListener {
     private val menu = PopupMenu(context, menuView)
 
+    /**
+     * The speed toggle belongs to whichever group is on screen, and that group
+     * can change while the menu sits closed, so the mark is read at open time.
+     * A null state means there is no group to test, which hides the item rather
+     * than leaving a switch that would do nothing.
+     */
     fun show() {
+        menu.menu.findItem(R.id.speed_test)?.apply {
+            isVisible = speedTestState() != null
+
+            speedTestState()?.let { isChecked = it }
+        }
+
         menu.show()
     }
 
     override fun onMenuItemClick(item: MenuItem): Boolean {
+        // Flips the per-group switch itself, so the mark is left to the next
+        // open to report rather than guessed at here.
+        if (item.itemId == R.id.speed_test) {
+            onSpeedTestToggle()
+
+            return true
+        }
+
         item.isChecked = !item.isChecked
 
         when (item.itemId) {

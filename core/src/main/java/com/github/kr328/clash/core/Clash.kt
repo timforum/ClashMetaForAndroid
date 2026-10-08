@@ -219,6 +219,46 @@ object Clash {
         ProbTestJson.decodeFromString(ProbTestEnvelope.serializer(), json)
     }
 
+    /**
+     * Measure every leaf node of a live group through the real transfer gate
+     * and rank what survived.
+     *
+     * Unlike [probTest] the candidates are the proxies the core is already
+     * running: the same adapters the connection uses are the ones measured, so
+     * a node that passes here is one the reader just watched work. The call
+     * blocks inside the core for [SpeedTestOptions.rounds] rounds per node,
+     * which is why it is dispatched to [Dispatchers.IO]. [onProgress] receives
+     * one event per node finished.
+     */
+    suspend fun speedTestGroup(
+        group: String,
+        options: SpeedTestOptions = SpeedTestOptions(),
+        onProgress: (SpeedTestProgress) -> Unit = {}
+    ): SpeedTestEnvelope = withContext(Dispatchers.IO) {
+        val json = Bridge.nativeSpeedTestGroup(
+            object : FetchCallback {
+                override fun report(statusJson: String) {
+                    try {
+                        onProgress(
+                            SpeedTestJson.decodeFromString(
+                                SpeedTestProgress.serializer(),
+                                statusJson
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.w("Invalid speed test progress", e)
+                    }
+                }
+
+                override fun complete(error: String?) = Unit
+            },
+            group,
+            SpeedTestJson.encodeToString(SpeedTestOptions.serializer(), options)
+        )
+
+        SpeedTestJson.decodeFromString(SpeedTestEnvelope.serializer(), json)
+    }
+
     fun queryProviders(): List<Provider> {
         val providers =
             Json.Default.decodeFromString(JsonArray.serializer(), Bridge.nativeQueryProviders())

@@ -5,14 +5,14 @@ import com.github.kr328.clash.common.store.Store
 import com.github.kr328.clash.common.store.asStoreProvider
 import com.github.kr328.clash.service.PreferenceProvider
 import com.github.kr328.clash.service.model.AccessControlMode
+import com.github.kr328.clash.service.model.SpeedTestSelection
+import kotlinx.serialization.json.Json
 import java.util.*
 
 class ServiceStore(context: Context) {
-    private val store = Store(
-        PreferenceProvider
-            .createSharedPreferencesFromContext(context)
-            .asStoreProvider()
-    )
+    private val prefs = PreferenceProvider.createSharedPreferencesFromContext(context)
+
+    private val store = Store(prefs.asStoreProvider())
 
     var activeProfile: UUID? by store.typedString(
         key = "active_profile",
@@ -192,4 +192,63 @@ class ServiceStore(context: Context) {
         key = "webdav_path",
         defaultValue = ""
     )
+
+    // Actual-transfer speed screening of live groups. The set is written by the
+    // proxy screen's toolbar toggle in the UI process and read by the periodic
+    // worker in :background, so like the probtest keys it lives in the
+    // multi-process "service" preferences. Each enabled group also carries a
+    // SpeedTestSelection naming the default node and the standby that takes
+    // over when the default stops answering.
+    var speedTestGroups by store.stringSet(
+        key = "speed_test_groups",
+        defaultValue = emptySet()
+    )
+
+    var speedTestIntervalMinutes by store.long(
+        key = "speed_test_interval_minutes",
+        defaultValue = 30L
+    )
+
+    /**
+     * The last ranking for [group]: which node won, which one stands behind it,
+     * and how fast the winner was. Keyed per group because each group keeps its
+     * own default and its own standby. Empty means the group has never been
+     * measured (or was reset).
+     */
+    fun speedTestSelection(group: String): SpeedTestSelection? {
+        val raw = prefs.getString(speedTestSelectionKey(group), "") ?: ""
+
+        if (raw.isEmpty())
+            return null
+
+        return try {
+            SpeedTestSelectionJson.decodeFromString(SpeedTestSelection.serializer(), raw)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Pass null to forget the ranking of [group]. */
+    fun setSpeedTestSelection(group: String, selection: SpeedTestSelection?) {
+        val editor = prefs.edit()
+
+        if (selection == null) {
+            editor.remove(speedTestSelectionKey(group))
+        } else {
+            editor.putString(
+                speedTestSelectionKey(group),
+                SpeedTestSelectionJson.encodeToString(SpeedTestSelection.serializer(), selection)
+            )
+        }
+
+        editor.apply()
+    }
+
+    private fun speedTestSelectionKey(group: String) = "speed_test_selection:$group"
+
+    companion object {
+        private val SpeedTestSelectionJson = Json {
+            ignoreUnknownKeys = true
+        }
+    }
 }

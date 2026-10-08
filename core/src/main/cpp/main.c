@@ -254,6 +254,22 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeProbTest(JNIEnv *env, jobje
     return new_string(response);
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeSpeedTestGroup(JNIEnv *env, jobject thiz,
+                                                                    jobject callback,
+                                                                    jstring group,
+                                                                    jstring options) {
+    TRACE_METHOD();
+
+    jobject _callback = new_global(callback);
+    scoped_string _group = get_string(group);
+    scoped_string _options = get_string(options);
+
+    scoped_string response = speedTestGroup(_callback, _group, _options);
+
+    return new_string(response);
+}
+
 JNIEXPORT void JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeSetAgeSecretKey(JNIEnv *env, jobject thiz,
                                                                       jstring key) {

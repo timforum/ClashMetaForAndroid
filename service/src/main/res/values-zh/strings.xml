@@ -16,4 +16,9 @@
     <string name="profile_updating">配置更新中</string>
     <string name="profile_service_status">配置文件服务状态</string>
     <string name="profile_process_result">配置文件处理结果</string>
+    <string name="speed_test_worker">实际测速</string>
+    <string name="speed_test_running">正在测速各分组节点</string>
+    <string name="speed_test_group_progress">测速 %1$s — %2$d/%3$d</string>
+    <string name="speed_test_switched">%1$s：默认节点已失效，已切换至 %2$s</string>
+    <string name="speed_test_failure">实际测速失败</string>
 </resources>

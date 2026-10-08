@@ -30,4 +30,10 @@
     <string name="probtest_result">Subscription screening result</string>
     <string name="probtest_success">Screening completed</string>
     <string name="probtest_failure">Screening failed</string>
+
+    <string name="speed_test_worker">Speed Test</string>
+    <string name="speed_test_running">Measuring group speeds</string>
+    <string name="speed_test_group_progress">Testing %1$s — %2$d/%3$d</string>
+    <string name="speed_test_switched">%1$s: default node stopped answering, switched to %2$s</string>
+    <string name="speed_test_failure">Speed test failed</string>
 </resources>

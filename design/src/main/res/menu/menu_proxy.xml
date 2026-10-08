@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The toolbar carries the same toggle as an icon, which a remote-driven
+         screen makes easy to walk past. The menu repeats it with a label so the
+         feature is reachable without hunting for a 24dp glyph in the corner. -->
+    <item
+        android:id="@+id/speed_test"
+        android:checkable="true"
+        android:title="@string/speed_test" />
     <item android:title="@string/filter">
         <menu>
             <item

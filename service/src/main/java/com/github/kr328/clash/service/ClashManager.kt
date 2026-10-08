@@ -76,6 +76,20 @@ class ClashManager(private val context: Context) : IClashManager,
         return Clash.updateProvider(type, name).await()
     }
 
+    override suspend fun speedTestGroup(group: String, options: String): String {
+        val parsed = try {
+            SpeedTestJson.decodeFromString(SpeedTestOptions.serializer(), options)
+        } catch (e: Exception) {
+            Log.w("Invalid speed test options", e)
+
+            SpeedTestOptions()
+        }
+
+        val envelope = Clash.speedTestGroup(group, parsed)
+
+        return SpeedTestJson.encodeToString(SpeedTestEnvelope.serializer(), envelope)
+    }
+
     override fun setLogObserver(observer: ILogObserver?) {
         synchronized(this) {
             logReceiver?.apply {

@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -174,6 +175,67 @@ func PatchSelector(selector, name string) bool {
 	closeConnByGroup(selector)
 
 	return true
+}
+
+// SpeedTarget is one live group member handed to the real-transfer speed
+// test: the name results are reported under, the delay the UI already shows
+// so a reader can line the two numbers up, and the adapter the measurement
+// runs through.
+type SpeedTarget struct {
+	Name  string
+	Delay int
+	Proxy C.Proxy
+}
+
+// GroupSpeedTargets resolves a group to the nodes a speed test may measure.
+//
+// Only leaf proxies are returned. A nested group is skipped because measuring
+// it would measure the nodes behind it a second time through an extra hop,
+// and the built-in DIRECT/REJECT entries are skipped because they carry no
+// exit: timing them would measure the device's own link instead of a node a
+// reader could pick. A missing or non-group name is an error so a toggle left
+// behind for a removed group fails loudly instead of silently measuring
+// nothing.
+func GroupSpeedTargets(name string) ([]SpeedTarget, error) {
+	p := tunnel.Proxies()[name]
+	if p == nil {
+		return nil, fmt.Errorf("group `%s` not found", name)
+	}
+
+	g, ok := p.Adapter().(outboundgroup.ProxyGroup)
+	if !ok {
+		return nil, fmt.Errorf("`%s` is not a group (%s)", name, p.Type().String())
+	}
+
+	proxies := g.Proxies()
+	result := make([]SpeedTarget, 0, len(proxies))
+
+	for _, px := range proxies {
+		if _, isGroup := px.Adapter().(outboundgroup.ProxyGroup); isGroup {
+			continue
+		}
+
+		switch px.Name() {
+		case "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL":
+			continue
+		}
+
+		testURL := "https://www.gstatic.com/generate_204"
+		for k := range px.ExtraDelayHistories() {
+			if len(k) > 0 {
+				testURL = k
+				break
+			}
+		}
+
+		result = append(result, SpeedTarget{
+			Name:  px.Name(),
+			Delay: int(px.LastDelayForTestUrl(testURL)),
+			Proxy: px,
+		})
+	}
+
+	return result, nil
 }
 
 func convertProxies(proxies []C.Proxy, uiSubtitlePattern *regexp2.Regexp) []*Proxy {

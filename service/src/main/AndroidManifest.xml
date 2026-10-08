@@ -53,6 +53,14 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="explanation_for_special_use"/>
         </service>
+        <service
+            android:name=".SpeedTestWorker"
+            android:exported="false"
+            android:process=":background"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="explanation_for_special_use"/>
+        </service>
 
         <provider
             android:name=".FilesProvider"
@@ -108,6 +116,23 @@
             </intent-filter>
             <intent-filter>
                 <action android:name="${applicationId}.intent.action.PROBTEST_REQUEST" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".SpeedTestReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
+            android:process=":background">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="${applicationId}.intent.action.SPEEDTEST_REQUEST" />
             </intent-filter>
         </receiver>
     </application>

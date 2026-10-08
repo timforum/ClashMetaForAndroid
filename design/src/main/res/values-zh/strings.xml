@@ -203,6 +203,8 @@
     <string name="more">更多</string>
     <string name="save">保存</string>
     <string name="delay_test">延迟测试</string>
+    <string name="speed_test">实际测速</string>
+    <string name="speed_test_failure">实际测速失败</string>
     <string name="format_provider_type">%1$s(%2$s)</string>
     <string name="rule">规则</string>
     <string name="http">HTTP</string>

@@ -21,6 +21,7 @@ import com.github.kr328.clash.design.util.applyFrom
 import com.github.kr328.clash.design.util.layoutInflater
 import com.github.kr328.clash.design.util.resolveThemedColor
 import com.github.kr328.clash.design.util.root
+import com.github.kr328.clash.service.store.ServiceStore
 import com.google.android.material.tabs.TabLayoutMediator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,6 +31,7 @@ class ProxyDesign(
     overrideMode: TunnelState.Mode?,
     private val groupNames: List<String>,
     uiStore: UiStore,
+    private val serviceStore: ServiceStore,
 ) : Design<ProxyDesign.Request>(context) {
     sealed class Request {
         object ReloadAll : Request()
@@ -39,6 +41,9 @@ class ProxyDesign(
         data class Reload(val index: Int) : Request()
         data class Select(val index: Int, val name: String) : Request()
         data class UrlTest(val index: Int) : Request()
+
+        /** The toolbar toggle for [index] changed; the activity flips the per-group state. */
+        data class SpeedTest(val index: Int) : Request()
     }
 
     private val binding = DesignProxyBinding
@@ -47,8 +52,21 @@ class ProxyDesign(
     private var config = ProxyViewConfig(context, uiStore.proxyLine)
 
     private val menu: ProxyMenu by lazy {
-        ProxyMenu(context, binding.menuView, overrideMode, uiStore, requests) {
-            config.proxyLine = uiStore.proxyLine
+        ProxyMenu(
+            context,
+            binding.menuView,
+            overrideMode,
+            uiStore,
+            requests,
+            { config.proxyLine = uiStore.proxyLine },
+            {
+                groupNames.getOrNull(binding.pagesView.currentItem)
+                    ?.let { it in serviceStore.speedTestGroups }
+            }
+        ) {
+            groupNames.getOrNull(binding.pagesView.currentItem)?.let {
+                requests.trySend(Request.SpeedTest(binding.pagesView.currentItem))
+            }
         }
     }
 
@@ -56,6 +74,10 @@ class ProxyDesign(
         get() = binding.pagesView.adapter!! as ProxyPageAdapter
 
     private var horizontalScrolling = false
+
+    // Whose speed test is in flight, or -1 when none: a second group must not
+    // start one until the first returns, so the spinner always means something.
+    private var speedTestingIndex = -1
     private val verticalBottomScrolled: Boolean
         get() = adapter.states[binding.pagesView.currentItem].bottom
     private var urlTesting: Boolean
@@ -78,6 +100,9 @@ class ProxyDesign(
         adapter.states[position].urlTesting = false
 
         updateUrlTestButtonStatus()
+
+        if (position == binding.pagesView.currentItem)
+            refreshSpeedTestButton()
     }
 
     suspend fun requestRedrawVisible() {
@@ -89,6 +114,12 @@ class ProxyDesign(
     suspend fun showModeSwitchTips() {
         withContext(Dispatchers.Main) {
             Toast.makeText(context, R.string.mode_switch_tips, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    suspend fun showSpeedTestFailed() {
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, R.string.speed_test_failure, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -175,6 +206,7 @@ class ProxyDesign(
             binding.emptyView.visibility = View.VISIBLE
 
             binding.urlTestView.visibility = View.GONE
+            binding.speedTestLayout.visibility = View.GONE
             binding.tabLayoutView.visibility = View.GONE
             binding.elevationView.visibility = View.GONE
             binding.pagesView.visibility = View.GONE
@@ -207,6 +239,8 @@ class ProxyDesign(
 
                     override fun onPageSelected(position: Int) {
                         uiStore.proxyLastGroup = groupNames[position]
+
+                        refreshSpeedTestButton()
                     }
                 })
             }
@@ -214,6 +248,8 @@ class ProxyDesign(
             TabLayoutMediator(binding.tabLayoutView, binding.pagesView) { tab, index ->
                 tab.text = groupNames[index]
             }.attach()
+
+            refreshSpeedTestButton()
 
             val initialPosition = groupNames.indexOf(uiStore.proxyLastGroup)
 
@@ -230,6 +266,73 @@ class ProxyDesign(
         requests.trySend(Request.UrlTest(binding.pagesView.currentItem))
 
         updateUrlTestButtonStatus()
+    }
+
+    /**
+     * The toolbar's speed toggle. The running mark is claimed here rather than
+     * in the activity: two taps in the same frame would otherwise queue two
+     * requests, and one run at a time keeps the spinner honest. The activity
+     * releases the mark again whether the tap turned the switch on or off.
+     */
+    fun requestSpeedTest() {
+        if (speedTestingIndex != -1)
+            return
+
+        // Nothing to toggle without a group: the toolbar hides the icon, but a
+        // key event can still land here and an index would be a lie.
+        if (groupNames.isEmpty())
+            return
+
+        speedTestingIndex = binding.pagesView.currentItem
+
+        refreshSpeedTestButton()
+
+        requests.trySend(Request.SpeedTest(binding.pagesView.currentItem))
+    }
+
+    /**
+     * Marks [index] as measuring (or idle when [running] is false) and repaints
+     * the toggle when that group is the one on screen.
+     */
+    fun setSpeedTestRunning(index: Int, running: Boolean) {
+        speedTestingIndex = if (running) index else -1
+
+        if (index == binding.pagesView.currentItem)
+            refreshSpeedTestButton()
+    }
+
+    /**
+     * Paints the speed toggle for the group on screen: highlighted while the
+     * per-group switch is on ([ServiceStore.speedTestGroups]) and spinning
+     * while its measurement is in flight. The tint comes from the view, not
+     * the drawable, so turning the switch off falls back to the icon's own
+     * neutral tint by clearing it.
+     */
+    fun refreshSpeedTestButton() {
+        if (groupNames.isEmpty())
+            return
+
+        val index = binding.pagesView.currentItem
+        val enabled = serviceStore.speedTestGroups.contains(groupNames[index])
+        val running = speedTestingIndex == index
+
+        binding.speedTestView.imageTintList =
+            if (enabled)
+                ColorStateList.valueOf(
+                    context.resolveThemedColor(com.google.android.material.R.attr.colorSecondary)
+                )
+            else
+                ColorStateList.valueOf(
+                    context.resolveThemedColor(com.google.android.material.R.attr.colorControlNormal)
+                )
+
+        if (running) {
+            binding.speedTestView.visibility = View.GONE
+            binding.speedTestProgressView.visibility = View.VISIBLE
+        } else {
+            binding.speedTestView.visibility = View.VISIBLE
+            binding.speedTestProgressView.visibility = View.GONE
+        }
     }
 
     private fun updateUrlTestButtonStatus() {
