@@ -23,6 +23,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.InputStream
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /** One subscription to be screened. */
@@ -140,7 +141,7 @@ class ProbTestPipeline(private val context: Context) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
 
-        val candidates = collectCandidates(store)
+        val candidates = collectCandidates(store, uploadUrl)
         if (candidates.isEmpty()) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
@@ -310,20 +311,54 @@ class ProbTestPipeline(private val context: Context) {
      * again, or listed twice) is screened once, because a second fetch of the
      * identical document only duplicates the nodes it returns.
      */
-    private suspend fun collectCandidates(store: ServiceStore): List<ProbTestCandidate> {
+    /**
+     * Lists the subscriptions a round screens.
+     *
+     * [uploadUrl] is where the result is published, and nothing on the same
+     * origin may be screened: the worker answers the publish path and the
+     * subscription path from the same stored document, so screening the
+     * service's own output makes every round re-read what the previous one
+     * published. Nodes dropped by one round are gone from that document
+     * forever and can never come back, so the pool only ever shrinks - 1000
+     * nodes become 100, then 1, and a round against a single survivor can
+     * never grow again. Comparing origins rather than whole URLs is what
+     * catches it, since the two paths differ even though the host does not.
+     */
+    private suspend fun collectCandidates(
+        store: ServiceStore,
+        uploadUrl: String,
+    ): List<ProbTestCandidate> {
+        val destination = uploadUrl.takeIf { it.isNotEmpty() }?.let { originOf(it) }
+
         val seen = LinkedHashSet<String>()
         val candidates = mutableListOf<ProbTestCandidate>()
 
+        fun offer(name: String, url: String) {
+            if (url.isEmpty() || !seen.add(url)) {
+                return
+            }
+
+            if (destination != null && originOf(url) == destination) {
+                Log.w(
+                    "probtest: skipping '$url': it is served by the same origin as " +
+                        "the upload destination $uploadUrl, and screening the " +
+                        "published result would shrink the pool every round"
+                )
+                return
+            }
+
+            candidates += ProbTestCandidate(name, url)
+        }
+
         val primary = store.probtestTestUrl.trim()
         if (primary.isNotEmpty()) {
-            seen += primary
-            candidates += ProbTestCandidate(primary, primary)
+            offer(primary, primary)
         }
 
         for (line in store.probtestCandidates.lineSequence()) {
             val url = line.trim()
-            if (url.isNotEmpty() && seen.add(url)) {
-                candidates += ProbTestCandidate(url, url)
+            if (url.isNotEmpty()) {
+                offer(url, url)
             }
         }
 
@@ -333,22 +368,38 @@ class ProbTestPipeline(private val context: Context) {
         // build.
         for (line in readExtraSubFile(store.probtestExtraSubFile)) {
             val url = line.trim()
-            if (url.isNotEmpty() && seen.add(url)) {
-                candidates += ProbTestCandidate(url, url)
+            if (url.isNotEmpty()) {
+                offer(url, url)
             }
         }
 
         if (store.probtestIncludeImported) {
             for (profile in ImportedDao().queryAll()) {
-                if (profile.type == Profile.Type.Url && profile.source.isNotBlank() &&
-                    seen.add(profile.source)
-                ) {
-                    candidates += ProbTestCandidate(profile.name, profile.source)
+                if (profile.type == Profile.Type.Url && profile.source.isNotBlank()) {
+                    offer(profile.name, profile.source)
                 }
             }
         }
 
         return candidates
+    }
+
+    /**
+     * The scheme, host and port a URL is served from, or null when it has
+     * none. Lower-cased and without a trailing slash so that a host spelled
+     * with or without a default port compares equal.
+     */
+    private fun originOf(url: String): String? {
+        val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        if (host.isEmpty()) {
+            return null
+        }
+
+        val port = uri.port.takeIf { it >= 0 }?.toString() ?: ""
+
+        return "$scheme://$host:$port"
     }
 
     /**
