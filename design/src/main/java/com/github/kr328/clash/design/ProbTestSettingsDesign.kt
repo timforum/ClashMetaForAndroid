@@ -283,6 +283,28 @@ class ProbTestSettingsDesign(
                 },
             )
 
+            val probeUrlRow = editableTextWithRecent(
+                value = srvStore::probtestProbeUrl,
+                adapter = NullableTextAdapter.Text,
+                title = R.string.probtest_probe_url,
+                icon = R.drawable.ic_baseline_speed,
+                placeholder = R.string.probtest_probe_url_summary,
+                card = true,
+                recent = {
+                    srvStore.probtestProbeUrlHistory
+                        .lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .take(3)
+                        .toList()
+                },
+                recentLabel = R.string.probtest_probe_url_recent,
+                validator = ::isHttpUrl,
+                error = R.string.probtest_probe_url_error,
+            )
+
+            dependencies.add(probeUrlRow)
+
             editableText(
                 value = srvStore::probtestRoundGapSeconds,
                 adapter = NullableTextAdapter.Number,
@@ -376,4 +398,16 @@ class ProbTestSettingsDesign(
 
         restoreProgress()
     }
+}
+
+/**
+ * A probe target has to be something the core can fetch: an absolute http or
+ * https URL with a host. Anything else fails once per node per round, which on
+ * a pool of any size reads as every node dying rather than as a typo.
+ */
+private fun isHttpUrl(value: String): Boolean {
+    val uri = runCatching { Uri.parse(value.trim()) }.getOrNull() ?: return false
+    val scheme = uri.scheme?.lowercase()
+
+    return (scheme == "http" || scheme == "https") && !uri.host.isNullOrBlank()
 }

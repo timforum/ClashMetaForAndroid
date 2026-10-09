@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    One remembered probe target. Clicking it fills the field rather than
+    accepting the dialog outright, so a target can still be checked against
+    the current value before it is kept. A plain view rather than a data
+    binding layout: it carries no data and only needs its text set.
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/recent_item"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:ellipsize="middle"
+    android:paddingHorizontal="@dimen/dialog_padding"
+    android:paddingVertical="12dp"
+    android:singleLine="true"
+    android:textAppearance="?attr/textAppearanceBody2" />

@@ -30,6 +30,12 @@ import java.util.concurrent.TimeUnit
 data class ProbTestCandidate(val name: String, val url: String)
 
 /**
+ * How many probe targets the editor remembers. Three is what fits the dialog
+ * as choices under the field without the list having to scroll.
+ */
+private const val PROBE_URL_HISTORY = 3
+
+/**
  * The phase a round is in. Downloading and publishing are quick but not
  * instant, and the probing stage dominates the wall clock, so the three are
  * reported separately instead of as one opaque "running".
@@ -146,6 +152,14 @@ class ProbTestPipeline(private val context: Context) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
 
+        // Remembered here rather than when the field is edited, so a target only
+        // earns a place once a round has actually measured against it. A URL
+        // typed and abandoned would otherwise take a slot from one that works.
+        val probeUrl = store.probtestProbeUrl.trim()
+        if (probeUrl.isNotEmpty()) {
+            store.probtestProbeUrlHistory = rememberProbeUrl(store.probtestProbeUrlHistory, probeUrl)
+        }
+
         // The gate's tunables live in a JSON file on the device so a round
         // can be re-tuned by editing the file instead of rebuilding. It wins
         // over the built in defaults whenever present; a broken file fails
@@ -178,7 +192,7 @@ class ProbTestPipeline(private val context: Context) {
         val options = ProbTestOptions(
             // Empty hands the probe to the core default (Cloudflare generate_204).
             // The Test URL field is a candidate subscription, not a probe target.
-            testUrl = "",
+            testUrl = store.probtestProbeUrl.trim(),
             rounds = ROUNDS,
             roundGapMs = store.probtestRoundGapSeconds.coerceAtLeast(0L) * 1000L,
             templateIni = template.ini,
@@ -311,6 +325,31 @@ class ProbTestPipeline(private val context: Context) {
      * again, or listed twice) is screened once, because a second fetch of the
      * identical document only duplicates the nodes it returns.
      */
+
+    /**
+     * Puts [url] at the front of a newline separated history, keeping only the
+     * most recent [PROBE_URL_HISTORY] distinct entries. A repeat moves to the
+     * front instead of taking a second slot, so alternating between two
+     * targets does not push a third one out.
+     */
+    private fun rememberProbeUrl(history: String, url: String): String {
+        val kept = LinkedHashSet<String>()
+        kept += url
+
+        for (line in history.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed.isNotEmpty()) {
+                kept += trimmed
+            }
+
+            if (kept.size == PROBE_URL_HISTORY) {
+                break
+            }
+        }
+
+        return kept.take(PROBE_URL_HISTORY).joinToString("\n")
+    }
+
     /**
      * Lists the subscriptions a round screens.
      *

@@ -100,10 +100,26 @@ class ServiceStore(context: Context) {
         defaultValue = ""
     )
 
-    // The primary candidate subscription a round screens. Required; the probe
-    // target itself always falls back to the core default (Cloudflare).
+    // The primary candidate subscription a round screens.
     var probtestTestUrl by store.string(
         key = "probtest_test_url",
+        defaultValue = ""
+    )
+
+    // What the latency rounds measure against. The built in target is
+    // Cloudflare's generate_204, which a pool of any size ends up overloading:
+    // its first round passes and its second is refused outright, which reads as
+    // every node dying at once. Empty keeps that default.
+    var probtestProbeUrl by store.string(
+        key = "probtest_probe_url",
+        defaultValue = ""
+    )
+
+    // The last few probe targets, newest first, one per line. Kept so the
+    // editor can offer them without the field having to be retyped, and so a
+    // target that stops answering can be swapped away from in one tap.
+    var probtestProbeUrlHistory by store.string(
+        key = "probtest_probe_url_history",
         defaultValue = ""
     )
 

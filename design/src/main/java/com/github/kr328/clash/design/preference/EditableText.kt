@@ -4,6 +4,9 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import com.github.kr328.clash.design.R
 import com.github.kr328.clash.design.dialog.requestModelTextInput
+import com.github.kr328.clash.design.dialog.requestModelTextInputWithRecent
+import com.github.kr328.clash.design.util.Validator
+import com.github.kr328.clash.design.util.ValidatorAcceptAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,6 +89,71 @@ fun <T> PreferenceScreen.editableText(
                     reset = context.getText(R.string.reset),
                     hint = impl.title,
                     password = impl.password,
+                )
+
+                val newValue = withContext(Dispatchers.IO) {
+                    adapter.to(text).apply(value::set)
+                }
+
+                impl.text = adapter.from(newValue)
+            }
+        }
+    }
+
+    return impl
+}
+
+/**
+ * An editable text row whose editor also offers the values entered before.
+ *
+ * The values are not part of the row: the caller supplies them through
+ * [recent] on the editor call, so a field that has never been used opens as
+ * the plain input rather than onto an empty history.
+ */
+fun <T> PreferenceScreen.editableTextWithRecent(
+    value: KMutableProperty0<T>,
+    adapter: NullableTextAdapter<T>,
+    @StringRes title: Int,
+    @DrawableRes icon: Int? = null,
+    @StringRes placeholder: Int? = null,
+    @StringRes empty: Int? = null,
+    card: Boolean = false,
+    recent: suspend () -> List<String> = { emptyList() },
+    @StringRes recentLabel: Int? = null,
+    validator: Validator = ValidatorAcceptAll,
+    @StringRes error: Int? = null,
+): EditableTextPreference {
+    val impl = editableText(
+        value = value,
+        adapter = adapter,
+        title = title,
+        icon = icon,
+        placeholder = placeholder,
+        empty = empty,
+        card = card,
+    )
+
+    launch(Dispatchers.Main) {
+        val errorText = error?.let { context.getText(it) }
+        val recentText = recentLabel?.let { context.getText(it) }
+
+        // Swallowed rather than left hanging: a history that fails to read is
+        // only a convenience, and the field stays editable either way.
+        val recentValues = runCatching {
+            withContext(Dispatchers.IO) { recent() }
+        }.getOrDefault(emptyList())
+
+        impl.clicked {
+            this@editableTextWithRecent.launch(Dispatchers.Main) {
+                val text = context.requestModelTextInputWithRecent(
+                    initial = impl.text,
+                    title = impl.title,
+                    reset = context.getText(R.string.reset),
+                    hint = impl.title,
+                    error = errorText,
+                    validator = validator,
+                    recent = recentValues,
+                    recentLabel = recentText,
                 )
 
                 val newValue = withContext(Dispatchers.IO) {
