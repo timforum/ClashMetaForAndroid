@@ -20,6 +20,89 @@ buildscript {
     }
 }
 
+// ---- App version ----------------------------------------------------------
+//
+// The build moves the app version on by itself, so an APK that is already on a
+// phone is never mistaken for the one built before it. A run that packages an
+// artifact takes the last segment of the name and the code up by one; every
+// other invocation - cleaning, listing, compiling a library - leaves them
+// alone, because those produce nothing to install.
+
+val versionProperties = rootProject.file("gradle.properties")
+
+fun replaceProperty(text: String, key: String, value: String): String {
+    val line = Regex("(?m)^${Regex.escape(key)}=.*$")
+
+    return if (line.containsMatchIn(text)) {
+        text.replace(line, "$key=$value")
+    } else {
+        text.trimEnd('\n', '\r') + "\n$key=$value\n"
+    }
+}
+
+var appVersionName = providers.gradleProperty("cmfa.versionName").getOrElse("2.11.34.4")
+var appVersionCode = providers.gradleProperty("cmfa.versionCode").getOrElse("211038").trim().toInt()
+
+if (gradle.startParameter.taskNames.any {
+        it.contains("assemble", ignoreCase = true) || it.contains("package", ignoreCase = true)
+    }
+) {
+    val segments = appVersionName.trim().split('.')
+    val build = (segments.lastOrNull()?.toIntOrNull() ?: 0) + 1
+
+    appVersionName = (segments.dropLast(1) + build).joinToString(".")
+    appVersionCode += 1
+
+    // Written back rather than only held in memory so the next run starts from
+    // what this one shipped. The keys are matched one line at a time to keep
+    // the comments in the file, which a Properties round trip would drop.
+    versionProperties.writeText(
+        replaceProperty(
+            replaceProperty(versionProperties.readText(), "cmfa.versionCode", "$appVersionCode"),
+            "cmfa.versionName",
+            appVersionName,
+        )
+    )
+}
+
+// ---- Core version header --------------------------------------------------
+//
+// The About screen's second line is this header. Gradle writes it because it
+// knows which commit this repository is on and what day the build ran; CMake
+// used to own it and only rewrote it when it reconfigured, which left the date
+// frozen at the day it last happened to run while every newer APK carried the
+// same string.
+
+fun gitLine(vararg args: String): String =
+    runCatching {
+        providers.exec {
+            commandLine(listOf("git", "-C", rootDir.absolutePath) + args)
+            isIgnoreExitValue = true
+        }.standardOutput.asText.get()
+    }.getOrDefault("")
+        .lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() }
+        .orEmpty()
+        .ifEmpty { "unknown" }
+
+val versionHeaderTemplate = rootProject.file("core/src/main/cpp/version.h.in")
+val versionHeader = rootProject.file("core/src/main/cpp/version.h")
+
+if (versionHeaderTemplate.exists()) {
+    val coreVersion = "%s_%s_%s".format(
+        gitLine("rev-parse", "--abbrev-ref", "HEAD"),
+        gitLine("log", "-1", "--format=%h"),
+        java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd")),
+    )
+
+    val wanted = versionHeaderTemplate.readText().replace("@GIT_VERSION@", coreVersion)
+
+    if (!versionHeader.exists() || versionHeader.readText() != wanted) {
+        versionHeader.writeText(wanted)
+    }
+}
+
 subprojects {
     repositories {
         mavenCentral()
@@ -64,8 +147,8 @@ subprojects {
             minSdk = 21
             targetSdk = 35
 
-            versionName = "2.11.34.4"
-            versionCode = 211038
+            versionName = appVersionName
+            versionCode = appVersionCode
 
             resValue("string", "release_name", "v$versionName")
             resValue("integer", "release_code", "$versionCode")

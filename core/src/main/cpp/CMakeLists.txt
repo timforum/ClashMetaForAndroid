@@ -1,46 +1,15 @@
 cmake_minimum_required(VERSION 3.0)
 
-# 获取git hash
+# 版本信息由 Gradle 写入：它知道本仓库当前所在的提交，以及构建当天是哪一天。
+# CMake 只在重新配置时才重写自己生成的头文件，之前由它生成会把日期冻结在上一次
+# 配置的那天，之后每个更新的 APK 都带着同一个字符串。
+# 这里只作为不经 Gradle 直接配置 CMake 时的兜底：那时还没有人写过该文件。
 
-message(STATUS "CMAKE_CURRENT_SOURCE_DIR= ${CMAKE_CURRENT_SOURCE_DIR}")
-execute_process(
-  COMMAND git submodule foreach git log -1 --format=%H   
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} 
-  OUTPUT_VARIABLE COMMIT_HASH
-)
-string(REPLACE "\n" ";" COMMIT_HASH "${COMMIT_HASH}")
-list(GET COMMIT_HASH 1 COMMIT_HASH)
-string (REGEX REPLACE "[\n\t\r]" "" COMMIT_HASH ${COMMIT_HASH})
-string(SUBSTRING ${COMMIT_HASH} 0 7 COMMIT_HASH)
-message(STATUS "git hash= ${COMMIT_HASH}")
-
-# 获取分支名称
-execute_process(
-  COMMAND git submodule foreach git branch -r --contains ${COMMIT_HASH}
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} 
-  OUTPUT_VARIABLE CURRENT_BRANCH
-)
-string(REPLACE "\n" ";" CURRENT_BRANCH "${CURRENT_BRANCH}")
-list(GET CURRENT_BRANCH 1 CURRENT_BRANCH)
-string (REGEX REPLACE "origin/" "" CURRENT_BRANCH ${CURRENT_BRANCH})
-string (REGEX REPLACE "[\n\t\r]" "" CURRENT_BRANCH ${CURRENT_BRANCH})
-#string(SUBSTRING ${CURRENT_BRANCH} 0 8 CURRENT_BRANCH)
-message(STATUS "git current branch = ${CURRENT_BRANCH}")
-
-# 获取生成时间
-string(TIMESTAMP COMPILE_TIME "%y%m%d")
-string (REGEX REPLACE "[\n\t\r]" "" COMPILE_TIME ${COMPILE_TIME})
-string(REGEX REPLACE "\"" "" COMPILE_TIME ${COMPILE_TIME})
-
-# 生成版本信息
-set(GIT_VERSION "${CURRENT_BRANCH}_${COMMIT_HASH}_${COMPILE_TIME}")
-message(STATUS "version info = ${GIT_VERSION}")
-
-# 去除空格
-string(REGEX REPLACE "[ ]+" "" GIT_VERSION "${GIT_VERSION}")
-
-# 保存变量到文件
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/version.h @ONLY)
+if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/version.h)
+  file(READ ${CMAKE_CURRENT_SOURCE_DIR}/version.h.in FALLBACK_VERSION_HEADER)
+  string(REPLACE "@GIT_VERSION@" "unknown_unknown_000000" FALLBACK_VERSION_HEADER "${FALLBACK_VERSION_HEADER}")
+  file(WRITE ${CMAKE_CURRENT_SOURCE_DIR}/version.h "${FALLBACK_VERSION_HEADER}")
+endif()
 
 project(clash-bridge C)
 
