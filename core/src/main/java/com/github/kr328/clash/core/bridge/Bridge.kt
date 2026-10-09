@@ -39,6 +39,8 @@ object Bridge {
 
     external fun nativeSpeedTestGroup(callback: FetchCallback, group: String, options: String): String
 
+    external fun nativeMonitorGroup(group: String): String
+
     external fun nativeLoad(completable: CompletableDeferred<Unit>, path: String)
     external fun nativeQueryProviders(): String
     external fun nativeUpdateProvider(

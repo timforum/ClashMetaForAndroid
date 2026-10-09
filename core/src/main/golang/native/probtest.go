@@ -37,6 +37,9 @@ type probTestRequest struct {
 	RoundTimeoutMs int64  `json:"roundTimeoutMs"`
 	Concurrency    int    `json:"concurrency"`
 	ExpectStatus   string `json:"expectStatus"`
+	// MaxDelayMs is the delay ceiling a node must answer within to stay in
+	// the running; zero defers to the core default.
+	MaxDelayMs int64 `json:"maxDelayMs"`
 	// TemplateINI is the subconverter style template that decides which groups
 	// the surviving nodes fill and where each rule set goes. Empty keeps the
 	// fixed built in layout, so a caller without a template still publishes.
@@ -103,6 +106,7 @@ func (r probTestRequest) options() (probtest.Options, error) {
 		RoundTimeout: durationMs(r.RoundTimeoutMs),
 		Concurrency:  r.Concurrency,
 		ExpectStatus: r.ExpectStatus,
+		MaxDelayMs:   r.MaxDelayMs,
 		SpeedTest:    st,
 	}, nil
 }

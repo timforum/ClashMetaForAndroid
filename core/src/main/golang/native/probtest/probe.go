@@ -177,6 +177,8 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, opt.Concurrency)
 
+	maxDelay := effectiveMaxDelayMs(opt)
+
 	for _, n := range eligible {
 		if ctx.Err() != nil {
 			break
@@ -207,7 +209,7 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 
 			select {
 			case r := <-res:
-				applyProbe(n, r)
+				applyProbe(n, r, maxDelay)
 			case <-ctx.Done():
 				markFailed(n, ctx.Err().Error())
 			case <-timer.C:
@@ -233,13 +235,30 @@ func hardProbeCap(opt Options) time.Duration {
 	return opt.RoundTimeout + 30*time.Second
 }
 
-func applyProbe(n *node, r probeResult) {
+// applyProbe folds one probe outcome into the node. A node that answered at
+// all but slower than the delay limit is failed the same way a dead exit is:
+// reachable-but-slow is not worth connecting through, and the next rounds
+// must not carry it into the published groups.
+func applyProbe(n *node, r probeResult, maxDelayMs int64) {
 	if r.err != nil {
 		markFailed(n, r.err.Error())
 		return
 	}
+	if maxDelayMs > 0 && int64(r.delay) > maxDelayMs {
+		markFailed(n, fmt.Sprintf("delay %dms above %dms limit", r.delay, maxDelayMs))
+		return
+	}
 	n.passes++
 	n.delays = append(n.delays, int(r.delay))
+}
+
+// effectiveMaxDelayMs guards against a caller that skipped withDefaults: a
+// zero must not turn into "every node fails", it means the default limit.
+func effectiveMaxDelayMs(opt Options) int64 {
+	if opt.MaxDelayMs <= 0 {
+		return defaultMaxDelayMs
+	}
+	return opt.MaxDelayMs
 }
 
 // markFailed records one failure of a node and takes it out of the running.

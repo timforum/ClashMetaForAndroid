@@ -28,9 +28,18 @@ class SpeedTestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> scheduleNext(context)
+            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> {
+                scheduleNext(context)
+                scheduleWatch(context)
+            }
 
             Intents.ACTION_SPEEDTEST_REQUEST -> {
+                val redirect = intent.setComponent(SpeedTestWorker::class.componentName)
+
+                context.startForegroundServiceCompat(redirect)
+            }
+
+            Intents.ACTION_SPEEDTEST_WATCH -> {
                 val redirect = intent.setComponent(SpeedTestWorker::class.componentName)
 
                 context.startForegroundServiceCompat(redirect)
@@ -59,6 +68,8 @@ class SpeedTestReceiver : BroadcastReceiver() {
             if (store.speedTestGroups.isEmpty()) {
                 Log.d("speedtest: no group enabled, no round scheduled")
 
+                cancelWatch(context)
+
                 return
             }
 
@@ -73,8 +84,56 @@ class SpeedTestReceiver : BroadcastReceiver() {
             context.getSystemService<AlarmManager>()?.cancel(pendingIntentOf(context))
         }
 
+        /**
+         * Arms the next watch pass of the node each enabled group is
+         * connected through, or cancels it when no group is enabled any more.
+         *
+         * Deliberately far tighter than [scheduleNext]: a watch pass costs a
+         * free traffic snapshot per group and only spends a probe when that
+         * snapshot says the node in use stopped carrying, so a tight rhythm
+         * answers a stalled connection without spending the device's data on
+         * the check. A minimum of one minute keeps a mistyped value from
+         * turning the watch into a probe loop.
+         */
+        fun scheduleWatch(context: Context) {
+            val intent = watchIntentOf(context)
+            val alarm = context.getSystemService<AlarmManager>() ?: return
+
+            alarm.cancel(intent)
+
+            val store = ServiceStore(context)
+
+            if (store.speedTestGroups.isEmpty()) {
+                Log.d("speedtest: no group enabled, no watch scheduled")
+
+                return
+            }
+
+            val delay = TimeUnit.MINUTES.toMillis(store.speedTestWatchMinutes.coerceAtLeast(1))
+
+            Log.d("speedtest: next watch in ${delay / 60000} minutes")
+
+            alarm.set(AlarmManager.RTC, System.currentTimeMillis() + delay, intent)
+        }
+
+        fun cancelWatch(context: Context) {
+            context.getSystemService<AlarmManager>()?.cancel(watchIntentOf(context))
+        }
+
         private fun pendingIntentOf(context: Context): PendingIntent {
             val intent = Intent(Intents.ACTION_SPEEDTEST_REQUEST)
+                .setComponent(SpeedTestReceiver::class.componentName)
+
+            return PendingIntent.getBroadcast(
+                context,
+                0,
+                intent,
+                pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
+            )
+        }
+
+        private fun watchIntentOf(context: Context): PendingIntent {
+            val intent = Intent(Intents.ACTION_SPEEDTEST_WATCH)
                 .setComponent(SpeedTestReceiver::class.componentName)
 
             return PendingIntent.getBroadcast(

@@ -6,6 +6,7 @@ import com.github.kr328.clash.common.store.asStoreProvider
 import com.github.kr328.clash.service.PreferenceProvider
 import com.github.kr328.clash.service.model.AccessControlMode
 import com.github.kr328.clash.service.model.SpeedTestSelection
+import com.github.kr328.clash.service.model.SpeedTestWatchState
 import kotlinx.serialization.json.Json
 import java.util.*
 
@@ -209,6 +210,16 @@ class ServiceStore(context: Context) {
         defaultValue = 30L
     )
 
+    // How often the watch of the node each enabled group is connected through
+    // re-checks it. Deliberately far tighter than speedTestIntervalMinutes:
+    // the watch is the cheap half (a free traffic snapshot per group, plus a
+    // probe only when that snapshot says something is wrong), and a stalled
+    // connection is what a reader notices first.
+    var speedTestWatchMinutes by store.long(
+        key = "speed_test_watch_minutes",
+        defaultValue = 2L
+    )
+
     /**
      * The last ranking for [group]: which node won, which one stands behind it,
      * and how fast the winner was. Keyed per group because each group keeps its
@@ -246,8 +257,48 @@ class ServiceStore(context: Context) {
 
     private fun speedTestSelectionKey(group: String) = "speed_test_selection:$group"
 
+    /**
+     * The watch state of [group]: what the core's traffic monitor last saw
+     * flowing through its current node, and the node the last switch left
+     * behind. Empty means the group has never been watched (or was reset).
+     */
+    fun speedTestWatchState(group: String): SpeedTestWatchState? {
+        val raw = prefs.getString(speedTestWatchStateKey(group), "") ?: ""
+
+        if (raw.isEmpty())
+            return null
+
+        return try {
+            SpeedTestWatchJson.decodeFromString(SpeedTestWatchState.serializer(), raw)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Pass null to forget the watch state of [group]. */
+    fun setSpeedTestWatchState(group: String, state: SpeedTestWatchState?) {
+        val editor = prefs.edit()
+
+        if (state == null) {
+            editor.remove(speedTestWatchStateKey(group))
+        } else {
+            editor.putString(
+                speedTestWatchStateKey(group),
+                SpeedTestWatchJson.encodeToString(SpeedTestWatchState.serializer(), state)
+            )
+        }
+
+        editor.apply()
+    }
+
+    private fun speedTestWatchStateKey(group: String) = "speed_test_watch_state:$group"
+
     companion object {
         private val SpeedTestSelectionJson = Json {
+            ignoreUnknownKeys = true
+        }
+
+        private val SpeedTestWatchJson = Json {
             ignoreUnknownKeys = true
         }
     }

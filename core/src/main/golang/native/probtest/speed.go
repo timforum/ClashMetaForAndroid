@@ -79,6 +79,14 @@ type SpeedOptions struct {
 	// Probes lists the reachability probes in order. Empty means the built
 	// in YouTube probes.
 	Probes []SpeedProbe `json:"probes,omitempty"`
+	// SkipReachability drops those probes from one measurement, leaving
+	// latency plus throughput. The periodic watch of the node the
+	// connection is on re-measures often: re-fetching the three YouTube
+	// pages every pass would spend more traffic on the check than the
+	// node serves between checks, while the two probes that remain
+	// answer the question the watch asks, whether the node still
+	// answers and still carries.
+	SkipReachability bool `json:"skipReachability,omitempty"`
 
 	MaxTime time.Duration `json:"-"`
 }
@@ -389,17 +397,22 @@ func isDialError(err error) bool {
 		strings.Contains(s, "i/o timeout") || strings.Contains(s, "no such host")
 }
 
-// speedCheck runs the full gate against one node: three reachability probes
+// speedCheck runs the gate against one node: three reachability probes
 // into YouTube, then one throughput measurement. The first failure stops the
 // rest, so a node that cannot reach the site at all never downloads video.
+//
+// With SkipReachability set the probes are skipped and only the throughput
+// is measured, which is what the periodic watch of the node in use asks.
 //
 // The returned stage names which probe decided, for the gate's summary.
 func speedCheck(ctx context.Context, proxy C.Proxy, sp SpeedOptions) (float64, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeoutPerNode)
 	defer cancel()
 
-	if stage, err := youtubeReachable(ctx, proxy, sp); err != nil {
-		return 0, stage, err
+	if !sp.SkipReachability {
+		if stage, err := youtubeReachable(ctx, proxy, sp); err != nil {
+			return 0, stage, err
+		}
 	}
 	return youtubeThroughput(ctx, proxy, sp)
 }

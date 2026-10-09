@@ -20,6 +20,7 @@ class ProbTestSettingsDesign(
     enum class Request {
         RunNow,
         PickExtraSubFile,
+        OpenIntervals,
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -266,14 +267,20 @@ class ProbTestSettingsDesign(
 
             category(R.string.probtest_schedule, card = true)
 
-            editableText(
-                value = srvStore::probtestIntervalMinutes,
-                adapter = NullableTextAdapter.Number,
-                title = R.string.probtest_interval,
-                icon = R.drawable.ic_outline_update,
-                placeholder = R.string.probtest_interval_summary,
+            // The two screening rhythms live in their own submenu: the delay
+            // round's interval and the live-group speed pass's interval belong
+            // together even though the two features are scheduled apart.
+            clickable(
+                title = R.string.probtest_intervals,
+                icon = R.drawable.ic_baseline_settings,
+                summary = R.string.probtest_intervals_summary,
                 card = true,
-                configure = dependencies::add,
+                configure = {
+                    dependencies.add(this)
+                    clicked {
+                        requests.trySend(ProbTestSettingsDesign.Request.OpenIntervals)
+                    }
+                },
             )
 
             editableText(

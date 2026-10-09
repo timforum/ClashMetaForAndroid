@@ -178,6 +178,11 @@
             android:exported="false"
             android:label="@string/probtest" />
         <activity
+            android:name=".ProbTestIntervalsActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/probtest" />
+        <activity
             android:name=".BackupSettingsActivity"
             android:configChanges="uiMode"
             android:exported="false"

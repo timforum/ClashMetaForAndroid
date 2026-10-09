@@ -18,6 +18,12 @@ data class ProbTestOptions(
     val concurrency: Int = 16,
     val expectStatus: String = "",
     /**
+     * A node that answers but slower than this ceiling (milliseconds) is
+     * dropped from the screening just like a dead one: reachable-but-slow is
+     * not worth connecting through. Zero lets the core apply its default.
+     */
+    @SerialName("maxDelayMs") val maxDelayMs: Long = 500,
+    /**
      * The subconverter style template that decides which groups the surviving
      * nodes fill and where each rule set sends its traffic. Empty keeps the
      * fixed built in layout the core publishes when no template is offered.

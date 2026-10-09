@@ -7,6 +7,7 @@ import com.github.kr328.clash.core.model.Proxy
 import com.github.kr328.clash.core.model.SpeedTestEnvelope
 import com.github.kr328.clash.core.model.SpeedTestJson
 import com.github.kr328.clash.core.model.SpeedTestOptions
+import com.github.kr328.clash.core.patchSelectorPath
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
@@ -140,10 +141,13 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                                 // and let the set decide whether a round is still due.
                                 design.setSpeedTestRunning(index, false)
 
-                                if (serviceStore.speedTestGroups.isEmpty())
+                                if (serviceStore.speedTestGroups.isEmpty()) {
                                     SpeedTestReceiver.cancelNext(this@ProxyActivity)
-                                else
+                                    SpeedTestReceiver.cancelWatch(this@ProxyActivity)
+                                } else {
                                     SpeedTestReceiver.scheduleNext(this@ProxyActivity)
+                                    SpeedTestReceiver.scheduleWatch(this@ProxyActivity)
+                                }
                             }
                         }
                         is ProxyDesign.Request.PatchMode -> {
@@ -210,19 +214,25 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                 )
             )
 
-            if (states[index].now != best) {
-                withClash {
-                    patchSelector(group, best)
-                }
+            // A node behind a sub group cannot be picked from the group above
+            // it: Set names a member, so the whole route down to the node has
+            // to be moved, not just the group that holds it.
+            val path = top?.path ?: listOf(group)
+            val moved = patchSelectorPath(group, best, path).orEmpty()
 
-                states[index].now = best
+            if (moved.isNotEmpty()) {
+                // What the group itself now routes to: the sub group it was
+                // pointed at, or the node itself when it holds it directly.
+                states[index].now = path.getOrElse(1) { best }
 
                 design.requestRedrawVisible()
             }
 
             // First round of the set is this one, already done; the supervisor
-            // takes over from here on the configured interval.
+            // takes over from here on the configured interval, and so does the
+            // tighter watch of the node this run just connected through.
             SpeedTestReceiver.scheduleNext(this)
+            SpeedTestReceiver.scheduleWatch(this)
         } catch (e: Exception) {
             design.showSpeedTestFailed()
         } finally {

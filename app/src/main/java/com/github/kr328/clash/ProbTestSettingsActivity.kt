@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.github.kr328.clash.common.compat.startForegroundServiceCompat
 import com.github.kr328.clash.common.constants.Intents
 import com.github.kr328.clash.common.log.Log
+import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.design.ProbTestSettingsDesign
 import com.github.kr328.clash.remote.Broadcasts
 import com.github.kr328.clash.service.ProbTestWorker
@@ -34,6 +35,8 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
                 }
                 design.requests.onReceive {
                     when (it) {
+                        ProbTestSettingsDesign.Request.OpenIntervals ->
+                            startActivity(ProbTestIntervalsActivity::class.intent)
                         ProbTestSettingsDesign.Request.RunNow -> {
                             // Logged before anything else: if the bar never
                             // appears but this line does, the tap landed and

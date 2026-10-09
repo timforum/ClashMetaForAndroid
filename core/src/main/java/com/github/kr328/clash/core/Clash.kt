@@ -259,6 +259,23 @@ object Clash {
         SpeedTestJson.decodeFromString(SpeedTestEnvelope.serializer(), json)
     }
 
+    /**
+     * Snapshot the traffic the core is carrying through the leaf nodes of
+     * one live group.
+     *
+     * Free: the core already counts the bytes of every open connection and
+     * already names the chain of nodes behind it, so the watch of the node
+     * in use asks a question the core has already paid for. The per-node
+     * numbers are cumulative since the core first looked at that node, so
+     * subtracting a previous snapshot gives the bytes that moved over the
+     * window between the two reads.
+     */
+    fun queryNodeTraffic(group: String): NodeTrafficEnvelope {
+        val json = Bridge.nativeMonitorGroup(group)
+
+        return SpeedTestJson.decodeFromString(NodeTrafficEnvelope.serializer(), json)
+    }
+
     fun queryProviders(): List<Provider> {
         val providers =
             Json.Default.decodeFromString(JsonArray.serializer(), Bridge.nativeQueryProviders())

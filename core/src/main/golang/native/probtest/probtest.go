@@ -25,6 +25,9 @@ type Options struct {
 	// ExpectStatus, when non-empty, restricts the accepted HTTP status
 	// (e.g. "204"). Empty accepts any status.
 	ExpectStatus string
+	// MaxDelayMs eliminates a node whose probe answered slower than this even
+	// when the exit itself worked. Zero defers to defaultMaxDelayMs.
+	MaxDelayMs int64
 	// Template, when set, decides which groups the surviving nodes fill and
 	// where each rule set sends its traffic. A round given none publishes the
 	// fixed built in layout instead, which is what a caller that has no
@@ -45,6 +48,10 @@ const (
 	defaultRoundGap     = 20 * time.Second
 	defaultRoundTimeout = 10 * time.Second
 	defaultConcurrency  = 16
+	// defaultMaxDelayMs answers the question of whether a reachable node is
+	// fast enough to connect through: an exit that takes half a second per
+	// request is technically alive but drags everything behind it.
+	defaultMaxDelayMs = 500
 )
 
 // Node is the outcome of one candidate node.
@@ -94,10 +101,10 @@ type Progress struct {
 	// Stage names the phase a run is in: empty for the latency rounds,
 	// StageSpeedTest for the throughput gate. Empty keeps the wire format
 	// unchanged for a caller compiled before the gate existed.
-	Stage string `json:"stage,omitempty"`
-	Round int   `json:"round"`
-	Rounds    int   `json:"rounds"`
-	ElapsedMs int64 `json:"elapsedMs"`
+	Stage     string `json:"stage,omitempty"`
+	Round     int    `json:"round"`
+	Rounds    int    `json:"rounds"`
+	ElapsedMs int64  `json:"elapsedMs"`
 	// Passed counts nodes that have not failed yet and will be probed again.
 	Passed   int `json:"passed"`
 	Failed   int `json:"failed"`
@@ -136,6 +143,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Concurrency <= 0 {
 		o.Concurrency = defaultConcurrency
+	}
+	if o.MaxDelayMs <= 0 {
+		o.MaxDelayMs = defaultMaxDelayMs
 	}
 	return o
 }

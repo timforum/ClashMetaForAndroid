@@ -396,6 +396,14 @@
     <string name="probtest_extra_sub_file_summary">Tap to pick a file, one URL per line</string>
     <string name="probtest_extra_sub_file_set">Using file: %1$s</string>
     <string name="probtest_schedule">Schedule</string>
+    <string name="probtest_intervals">Interval settings</string>
+    <string name="probtest_intervals_summary">How often each screening pass repeats</string>
+    <string name="probtest_delay_interval">Delay test interval (minutes)</string>
+    <string name="probtest_delay_interval_summary">How often the candidate subscriptions go through the delay rounds</string>
+    <string name="probtest_speed_interval">Speed test interval (minutes)</string>
+    <string name="probtest_speed_interval_summary">How often the groups toggled on the proxy screen are re-measured, at least 5</string>
+    <string name="probtest_watch_interval">In-use node watch interval (minutes)</string>
+    <string name="probtest_watch_interval_summary">How often the node each toggled group is connected through is re-checked, at least 1</string>
     <string name="probtest_interval">Interval in minutes</string>
     <string name="probtest_interval_summary">30</string>
     <string name="probtest_round_gap">Seconds between rounds</string>
