@@ -1,7 +1,7 @@
 package com.github.kr328.clash.core
 
 import com.github.kr328.clash.common.log.Log
-import com.github.kr328.clash.core.model.ProxySort
+import com.github.kr328.clash.core.model.ProxyGroup
 
 /**
  * The group types that answer Set with one of their own members, so a route
@@ -29,12 +29,23 @@ private val SELECTABLE_GROUP_TYPES = setOf("Selector", "Fallback", "URLTest")
  * Every hop is checked before anything is moved. A loadbalance in the middle
  * cannot be aimed, so the switch is abandoned whole rather than half applied.
  *
+ * The core is only loaded in the service process, so the two calls this needs
+ * are handed in rather than made here: the caller sitting in that process
+ * passes [Clash] itself, and a caller in any other process passes whatever
+ * reaches it.
+ *
  * Returns the groups that were moved, empty when the route already reaches the
  * target, or null when nothing happened: an unknown route, a hop that cannot
  * hold a selection, or a group refusing a name it does not list as a member.
  * The reason is logged at debug level, except the refusal which is a warning.
  */
-fun patchSelectorPath(group: String, target: String, path: List<String>): List<String>? {
+fun patchSelectorPath(
+    group: String,
+    target: String,
+    path: List<String>,
+    query: (String) -> ProxyGroup,
+    patch: (String, String) -> Boolean,
+): List<String>? {
     if (path.isEmpty() || path.first() != group) {
         Log.d("speedtest: $group: no known route from this group to '$target'")
 
@@ -42,7 +53,7 @@ fun patchSelectorPath(group: String, target: String, path: List<String>): List<S
     }
 
     for (hop in path) {
-        val type = Clash.queryGroup(hop, ProxySort.Default).type
+        val type = query(hop).type
 
         if (type !in SELECTABLE_GROUP_TYPES) {
             Log.d(
@@ -57,12 +68,9 @@ fun patchSelectorPath(group: String, target: String, path: List<String>): List<S
     val moved = mutableListOf<String>()
     var from = group
 
-    // Deliberately Clash.patchSelector and not the binder's patchSelector: a
-    // failover is transient and must not be persisted into the profile's saved
-    // selection, so the next profile load returns to the user's node.
     for (hop in path.drop(1)) {
-        if (Clash.queryGroup(from, ProxySort.Default).now != hop) {
-            if (!Clash.patchSelector(from, hop)) {
+        if (query(from).now != hop) {
+            if (!patch(from, hop)) {
                 Log.w("speedtest: $group: selector refused '$hop' in '$from'")
 
                 return null
@@ -74,8 +82,8 @@ fun patchSelectorPath(group: String, target: String, path: List<String>): List<S
         from = hop
     }
 
-    if (Clash.queryGroup(from, ProxySort.Default).now != target) {
-        if (!Clash.patchSelector(from, target)) {
+    if (query(from).now != target) {
+        if (!patch(from, target)) {
             Log.w("speedtest: $group: selector refused '$target' in '$from'")
 
             return null

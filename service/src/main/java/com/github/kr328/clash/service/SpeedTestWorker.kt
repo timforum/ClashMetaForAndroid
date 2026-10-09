@@ -368,8 +368,16 @@ class SpeedTestWorker : BaseService() {
         // The route has to be walked hop by hop: the outer group cannot name a
         // node two levels down, so pointing only the group that holds the node
         // would move a branch the connection never travels.
-        val moved = patchSelectorPath(group, target, paths[target] ?: listOf(group))
-            ?: return false
+        //
+        // The worker runs in the service process, which is where the core lives,
+        // so it hands in Clash itself rather than a remote that has to reach it.
+        val moved = patchSelectorPath(
+            group,
+            target,
+            paths[target] ?: listOf(group),
+            { name -> Clash.queryGroup(name, ProxySort.Default) },
+            { from, name -> Clash.patchSelector(from, name) },
+        ) ?: return false
 
         if (moved.isEmpty()) {
             // The route already reaches it, so nothing was switched: claiming

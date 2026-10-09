@@ -1,9 +1,11 @@
 package com.github.kr328.clash
 
 import android.view.KeyEvent
+import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.Proxy
+import com.github.kr328.clash.core.model.ProxySort
 import com.github.kr328.clash.core.model.SpeedTestEnvelope
 import com.github.kr328.clash.core.model.SpeedTestJson
 import com.github.kr328.clash.core.model.SpeedTestOptions
@@ -218,9 +220,27 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
             // it: Set names a member, so the whole route down to the node has
             // to be moved, not just the group that holds it.
             val path = top?.path ?: listOf(group)
-            val moved = patchSelectorPath(group, best, path).orEmpty()
+
+            // The core is only loaded in the service process, so a switch asked
+            // for here has to travel there and back. Going straight to Clash
+            // instead would patch an empty core and report a move that nothing
+            // ever makes.
+            val moved = withClash {
+                patchSelectorPath(
+                    group,
+                    best,
+                    path,
+                    { name -> queryProxyGroup(name, ProxySort.Default) },
+                    { from, name -> patchSelector(from, name) },
+                )
+            }.orEmpty()
 
             if (moved.isNotEmpty()) {
+                Log.d(
+                    "speedtest: $group: switched to '$best' " +
+                        "via ${moved.joinToString(" -> ")}"
+                )
+
                 // What the group itself now routes to: the sub group it was
                 // pointed at, or the node itself when it holds it directly.
                 states[index].now = path.getOrElse(1) { best }
