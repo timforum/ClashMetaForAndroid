@@ -347,13 +347,27 @@ class ProbTestPipeline(private val context: Context) {
         return upgraded
     }
 
+    /**
+     * Pushes the published configuration to the service.
+     *
+     * The body goes out compressed: a configuration is mostly rule providers,
+     * which repeat heavily and shrink to a fraction of their size, and the exit
+     * a round measures through is frequently far slower upstream than down - one
+     * node measured at 319 KB/s down and 37 KB/s up, which turned a four and a
+     * half megabyte upload into a timeout. The endpoint reads
+     * `Content-Encoding: gzip` and answers with what it stored, so this is only
+     * a smaller request rather than a different one.
+     */
     private suspend fun uploadTo(url: String, token: String, document: String): String {
+        val compressed = gzip(document)
+
         val request = Request.Builder()
             .url(url)
             .header("Content-Type", "application/yaml; charset=utf-8")
+            .header("Content-Encoding", "gzip")
             .header("User-Agent", USER_AGENT)
             .apply { if (token.isNotEmpty()) header("Authorization", "Bearer $token") }
-            .post(document.toRequestBody(YAML_MEDIA_TYPE))
+            .post(compressed.toRequestBody(YAML_MEDIA_TYPE))
             .build()
 
         withContext(Dispatchers.IO) {
@@ -367,7 +381,34 @@ class ProbTestPipeline(private val context: Context) {
             }
         }
 
+        Log.i(
+            "probtest: uploaded ${compressed.size} bytes of gzip " +
+                "(${document.toByteArray().size} plain) to $url"
+        )
+
         return url
+    }
+
+    /**
+     * The gzipped [text], or the plain bytes when it cannot be compressed.
+     *
+     * Compression is an optimisation, not a requirement: an endpoint that
+     * ignores Content-Encoding would store the plain body it is sent, so a
+     * failure here must not cost the round its only result.
+     */
+    private fun gzip(text: String): ByteArray {
+        return try {
+            val buffer = java.io.ByteArrayOutputStream()
+            java.util.zip.GZIPOutputStream(buffer).use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+            }
+
+            buffer.toByteArray()
+        } catch (e: Exception) {
+            Log.w("probtest: cannot compress the upload, sending it plain", e)
+
+            text.toByteArray(Charsets.UTF_8)
+        }
     }
 
     /**
@@ -689,9 +730,11 @@ class ProbTestPipeline(private val context: Context) {
         /**
          * The ceiling for pushing a configuration out. Larger than the download
          * one because it carries the whole document, and a timeout here loses
-         * the round's only result rather than one of its inputs.
+         * the round's only result rather than one of its inputs. The body is
+         * compressed, so this is headroom over a transfer that is measured in
+         * tens of seconds, not a figure taken from one.
          */
-        const val UPLOAD_TIMEOUT_MS = 180_000L
+        const val UPLOAD_TIMEOUT_MS = 300_000L
 
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         val YAML_MEDIA_TYPE = "application/yaml; charset=utf-8".toMediaType()
