@@ -1,4 +1,4 @@
-import java.net.URL
+﻿import java.net.URL
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -35,6 +35,12 @@ tasks.getByName("clean", type = Delete::class) {
 
 val geoFilesDownloadDir = "src/main/assets"
 
+// Every one of these is several megabytes, so a floor this low never rejects a
+// real file and still catches the common way one goes wrong: a transfer that
+// stops early. It cannot catch a file that is 99% of the right size, because
+// the release publishes no checksum to check it against.
+val minGeoFileBytes = 1024L * 1024
+
 task("downloadGeoFiles") {
 
     val geoFilesUrls = mapOf(
@@ -45,14 +51,58 @@ task("downloadGeoFiles") {
         "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/BundleMRS.7z" to "BundleMRS.7z",
     )
 
+    val geoFiles = geoFilesUrls.map { (downloadUrl, name) -> downloadUrl to file("$geoFilesDownloadDir/$name") }
+
+    // The assets directory is not tracked, so nothing else tells Gradle these
+    // files are already here. Declared without that, the task runs on every
+    // single build and pulls twenty-six megabytes over a link that fails often
+    // enough to lose a build to it - and the file it loses the build on is one
+    // that was already downloaded.
+    outputs.files(geoFiles.map { it.second })
+
+    outputs.upToDateWhen {
+        geoFiles.all { (_, path) -> path.isFile && path.length() > minGeoFileBytes }
+    }
+
     doLast {
-        geoFilesUrls.forEach { (downloadUrl, outputFileName) ->
-            val url = URL(downloadUrl)
-            val outputPath = file("$geoFilesDownloadDir/$outputFileName")
+        geoFiles.forEach { (downloadUrl, outputPath) ->
             outputPath.parentFile.mkdirs()
-            url.openStream().use { input ->
-                Files.copy(input, outputPath.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                println("$outputFileName downloaded to $outputPath")
+
+            // Downloaded beside the target and moved into place only once it is
+            // whole. Copying straight onto the output truncates it first, so a
+            // transfer that dies halfway leaves a file that exists, passes the
+            // check above, and poisons every build from then on.
+            val partial = File(outputPath.parentFile, "${outputPath.name}.part")
+
+            try {
+                var attempt = 1
+                while (true) {
+                    try {
+                        URL(downloadUrl).openStream().use { input ->
+                            Files.copy(input, partial.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        break
+                    } catch (e: Exception) {
+                        if (attempt >= 3) {
+                            throw GradleException("could not download ${outputPath.name} from $downloadUrl", e)
+                        }
+                        logger.lifecycle(
+                            "${outputPath.name}: attempt ${attempt} failed (${e.message}), retrying"
+                        )
+                        attempt++
+                    }
+                }
+
+                if (partial.length() <= minGeoFileBytes) {
+                    throw GradleException(
+                        "${outputPath.name} came back at ${partial.length()} bytes, which is not a database"
+                    )
+                }
+
+                Files.move(partial.toPath(), outputPath.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                println("${outputPath.name} downloaded to $outputPath")
+            } finally {
+                partial.delete()
             }
         }
     }
