@@ -12,7 +12,11 @@ import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.store.ServiceStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +29,7 @@ import java.io.File
 import java.io.InputStream
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** One subscription to be screened. */
 data class ProbTestCandidate(val name: String, val url: String)
@@ -107,7 +112,23 @@ class ProbTestPipeline(private val context: Context) {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            // The per-read timeout says nothing about the whole call: a source
+            // that keeps trickling bytes never trips it, so the call needs its
+            // own ceiling for the coroutine's timeout to have anything to
+            // interrupt. execute() is blocking, so cancelling the coroutine
+            // alone would leave the socket open until the body finished.
+            .callTimeout(DOWNLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .followRedirects(true)
+            .build()
+    }
+
+    // Uploading and publishing move a whole configuration rather than reading
+    // one, so they get their own client: the download ceiling is sized for
+    // fetching a subscription and is too tight for pushing one out over a slow
+    // link, and nothing should be able to shorten it by way of a setting.
+    private val uploadClient by lazy {
+        client.newBuilder()
+            .callTimeout(UPLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
     }
 
@@ -177,14 +198,48 @@ class ProbTestPipeline(private val context: Context) {
             return ProbTestOutcome(false, e.message ?: "The screening template is missing")
         }
 
+        // Every candidate is fetched at once rather than one after another: each
+        // subscription can hold a megabyte of nodes and a slow one used to hold
+        // the whole round behind it for the length of its read timeout. The
+        // overall timeout is what keeps a source that stalls without closing
+        // from doing that again, and a source that misses it is dropped - the
+        // round screens whatever else answered, which is what it did when the
+        // fetch simply failed.
         val documents = mutableListOf<String>()
-        for ((index, candidate) in candidates.withIndex()) {
-            fetch(candidate.url)?.let { documents += it }
+        val progress = AtomicInteger()
 
+        coroutineScope {
+            candidates.map { candidate ->
+                async(Dispatchers.IO) {
+                    val text = withTimeoutOrNull(DOWNLOAD_TIMEOUT_MS) {
+                        fetch(candidate.url)
+                    }
+
+                    if (text == null && !candidate.url.isBlank()) {
+                        Log.w("probtest: $candidate.url gave up after ${DOWNLOAD_TIMEOUT_MS}ms")
+                    }
+
+                    progress.incrementAndGet()
+
+                    candidate to text
+                }
+            }.awaitAll()
+        }.forEach { (candidate, text) ->
             onProgress(
-                ProbTestProgress(Stage.DOWNLOADING, done = index + 1, total = candidates.size)
+                ProbTestProgress(
+                    Stage.DOWNLOADING,
+                    done = progress.get(),
+                    total = candidates.size,
+                )
             )
+
+            if (text != null) {
+                documents += text
+            } else {
+                Log.w("probtest: no document from ${candidate.name}")
+            }
         }
+
         if (documents.isEmpty()) {
             return ProbTestOutcome(false, "Every candidate subscription failed to download")
         }
@@ -302,7 +357,7 @@ class ProbTestPipeline(private val context: Context) {
             .build()
 
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
+            uploadClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     error(
                         "Upload endpoint responded with HTTP ${response.code}: " +
@@ -569,7 +624,7 @@ class ProbTestPipeline(private val context: Context) {
             .build()
 
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
+            uploadClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     error("GitHub responded with HTTP ${response.code}: ${response.body?.string()?.take(300)}")
                 }
@@ -622,6 +677,22 @@ class ProbTestPipeline(private val context: Context) {
         const val ROUNDS = 3
         const val USER_AGENT = "ClashMetaForAndroid/1.0"
         const val MAX_CANDIDATE_BYTES = 8L * 1024 * 1024
+
+        /**
+         * How long one candidate may take in all, whatever the socket-level
+         * timeouts allow. Long enough for a multi-megabyte subscription over a
+         * slow link, short enough that a stalled source does not hold the round
+         * for the sum of every read timeout it can take.
+         */
+        const val DOWNLOAD_TIMEOUT_MS = 90_000L
+
+        /**
+         * The ceiling for pushing a configuration out. Larger than the download
+         * one because it carries the whole document, and a timeout here loses
+         * the round's only result rather than one of its inputs.
+         */
+        const val UPLOAD_TIMEOUT_MS = 180_000L
+
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         val YAML_MEDIA_TYPE = "application/yaml; charset=utf-8".toMediaType()
     }
