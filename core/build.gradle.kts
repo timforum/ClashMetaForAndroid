@@ -21,6 +21,14 @@ golang {
             tags.set(listOf("foss","with_gvisor","cmfa"))
             srcDir.set(file("src/foss/golang"))
         }
+        // Listed rather than inherited: the plugin builds one Go binary per
+        // source set it is told about, and a flavor it has never heard of gets
+        // no externalGolangBuild task at all - which surfaces much later as the
+        // CMake task depending on a task that does not exist.
+        create("ai") {
+            tags.set(listOf("foss","with_gvisor","cmfa"))
+            srcDir.set(file("src/foss/golang"))
+        }
         all {
             fileName.set("libclash.so")
             packageName.set("cfa/native")

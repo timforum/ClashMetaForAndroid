@@ -243,6 +243,32 @@ subprojects {
                     applicationIdSuffix = ".meta"
                 }
             }
+
+            // The AI build. Same core, same screening, same everything else;
+            // it differs only in what it adds and in being installable beside
+            // the meta build rather than over it. That last part is why this
+            // is a flavor and not a branch: applicationIdSuffix is the only
+            // thing that lets one phone hold both, and a branch cannot set it,
+            // so a branch would mean the two builds could never be compared on
+            // the same device.
+            create("ai") {
+
+                dimension = flavorDimensionList[0]
+                if (!removeSuffix) {
+                    versionNameSuffix = ".Ai"
+                }
+
+                buildConfigField("boolean", "PREMIUM", "Boolean.parseBoolean(\"false\")")
+
+                if (needsAppLabels) {
+                    resValue("string", "launch_name", "@string/launch_name_ai")
+                    resValue("string", "application_name", "@string/application_name_ai")
+                }
+
+                if (isApp && !removeSuffix) {
+                    applicationIdSuffix = ".ai"
+                }
+            }
         }
 
         sourceSets {
@@ -250,6 +276,9 @@ subprojects {
                 java.srcDirs("src/foss/java")
             }
             getByName("alpha") {
+                java.srcDirs("src/foss/java")
+            }
+            getByName("ai") {
                 java.srcDirs("src/foss/java")
             }
         }
