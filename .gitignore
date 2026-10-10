@@ -75,3 +75,6 @@ package-lock.json
 
 # token-bearing subscription template, lives in the private cf-converter repo
 _t2.mjs
+
+# the app version the build moves on by itself: build state, not source
+version.properties

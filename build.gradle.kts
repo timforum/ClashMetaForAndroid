@@ -27,21 +27,38 @@ buildscript {
 // artifact takes the last segment of the name and the code up by one; every
 // other invocation - cleaning, listing, compiling a library - leaves them
 // alone, because those produce nothing to install.
+//
+// The two live in a file of their own that is not tracked. Keeping them in
+// gradle.properties would mean every packaging run left a change behind in the
+// working tree, which says nothing about the source and has to be thrown away
+// before the next commit.
 
-val versionProperties = rootProject.file("gradle.properties")
+val versionFile = rootProject.file("version.properties")
 
-fun replaceProperty(text: String, key: String, value: String): String {
-    val line = Regex("(?m)^${Regex.escape(key)}=.*$")
+fun readVersion(key: String, fallback: String): String {
+    val file = versionFile
 
-    return if (line.containsMatchIn(text)) {
-        text.replace(line, "$key=$value")
-    } else {
-        text.trimEnd('\n', '\r') + "\n$key=$value\n"
+    return try {
+        if (!file.isFile) {
+            fallback
+        } else {
+            Properties()
+                .apply { file.inputStream().use { load(it) } }
+                .getProperty(key)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: fallback
+        }
+    } catch (e: Exception) {
+        fallback
     }
 }
 
-var appVersionName = providers.gradleProperty("cmfa.versionName").getOrElse("2.11.34.4")
-var appVersionCode = providers.gradleProperty("cmfa.versionCode").getOrElse("211038").trim().toInt()
+// The fallback for a tree that has never packaged anything, kept at the last
+// version actually shipped so a fresh clone counts up from there rather than
+// from a number this file was written with long ago.
+var appVersionName = readVersion("versionName", "2.11.34.9")
+var appVersionCode = readVersion("versionCode", "211043").toInt()
 
 if (gradle.startParameter.taskNames.any {
         it.contains("assemble", ignoreCase = true) || it.contains("package", ignoreCase = true)
@@ -53,16 +70,17 @@ if (gradle.startParameter.taskNames.any {
     appVersionName = (segments.dropLast(1) + build).joinToString(".")
     appVersionCode += 1
 
-    // Written back rather than only held in memory so the next run starts from
-    // what this one shipped. The keys are matched one line at a time to keep
-    // the comments in the file, which a Properties round trip would drop.
-    versionProperties.writeText(
-        replaceProperty(
-            replaceProperty(versionProperties.readText(), "cmfa.versionCode", "$appVersionCode"),
-            "cmfa.versionName",
-            appVersionName,
-        )
-    )
+    // Written back only once the build has finished rather than as soon as the
+    // number is worked out, so the file records what was shipped and not what
+    // was attempted. A run that fails partway leaves no gap: the next one
+    // starts from the last number that actually reached a phone.
+    gradle.addListener(object : org.gradle.BuildAdapter() {
+        override fun buildFinished(result: org.gradle.BuildResult) {
+            if (result.failure == null) {
+                versionFile.writeText("versionName=$appVersionName\nversionCode=$appVersionCode\n")
+            }
+        }
+    })
 }
 
 // ---- Core version header --------------------------------------------------
