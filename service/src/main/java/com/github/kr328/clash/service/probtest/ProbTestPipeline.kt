@@ -255,6 +255,11 @@ class ProbTestPipeline(private val context: Context) {
             testUrl = store.probtestProbeUrl.trim(),
             rounds = ROUNDS,
             roundGapMs = store.probtestRoundGapSeconds.coerceAtLeast(0L) * 1000L,
+            // Clamped rather than merely defaulted: the core falls back to
+            // sixteen for anything at or below zero, but takes a large number
+            // at face value, and a round that opens a hundred thousand sockets
+            // takes the whole phone down before it finishes failing.
+            concurrency = store.probtestConcurrency.toInt().coerceIn(1, 128),
             templateIni = template.ini,
             ruleFiles = template.ruleFiles,
             speedTest = ProbTestSpeedTest(enabled = true),

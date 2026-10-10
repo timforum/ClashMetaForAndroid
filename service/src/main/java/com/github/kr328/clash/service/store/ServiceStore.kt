@@ -128,6 +128,19 @@ class ServiceStore(context: Context) {
         defaultValue = 20L
     )
 
+    // How many nodes one delay round probes at the same time. The figure is a
+    // compromise in both directions and neither end of the range is right for
+    // every pool: too low and a round over a few thousand nodes takes most of
+    // an hour, too high and the phone opens connections faster than the exits
+    // behind them can answer, which arrives as timeouts rather than as
+    // slowness and costs perfectly good nodes. Sixteen held a pool of about
+    // 1800, but a larger one needs fewer at a time and a link that is itself
+    // slow needs more.
+    var probtestConcurrency by store.long(
+        key = "probtest_concurrency",
+        defaultValue = 16L
+    )
+
     var probtestGitHubToken by store.string(
         key = "probtest_github_token",
         defaultValue = ""

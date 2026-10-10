@@ -408,6 +408,8 @@
     <string name="probtest_interval_summary">30</string>
     <string name="probtest_round_gap">Seconds between rounds</string>
     <string name="probtest_round_gap_summary">20</string>
+    <string name="probtest_concurrency">Nodes tested at once</string>
+    <string name="probtest_concurrency_summary">16, between 1 and 128. Higher finishes a large pool sooner but makes the probe target refuse connections, which reads as every node timing out.</string>
     <string name="probtest_probe_url">Probe URL</string>
     <string name="probtest_probe_url_summary">What the delay rounds measure against. Empty uses Cloudflare generate_204, which a large pool overloads: the first round passes and the second is refused outright.</string>
     <string name="probtest_probe_url_recent">Recently used</string>

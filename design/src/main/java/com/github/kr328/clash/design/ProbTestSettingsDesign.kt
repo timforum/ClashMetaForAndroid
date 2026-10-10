@@ -315,6 +315,16 @@ class ProbTestSettingsDesign(
                 configure = dependencies::add,
             )
 
+            editableText(
+                value = srvStore::probtestConcurrency,
+                adapter = NullableTextAdapter.Number,
+                title = R.string.probtest_concurrency,
+                icon = R.drawable.ic_baseline_view_list,
+                placeholder = R.string.probtest_concurrency_summary,
+                card = true,
+                configure = dependencies::add,
+            )
+
             category(R.string.probtest_github, card = true)
 
             editableText(
