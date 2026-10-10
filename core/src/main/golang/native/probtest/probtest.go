@@ -194,6 +194,19 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 
 	for i, entry := range entries {
 		name := nodeName(entry, i)
+
+		// Before the safety checks, because an information node is not
+		// something that needs checking: it is well formed and it connects,
+		// and reporting it as a node is how one ends up subscribing to
+		// "剩余流量：712.92 GB" and finding it in the proxy list afterwards.
+		if reason := informationReason(entry); reason != "" {
+			report.Rejected++
+			report.Nodes = append(report.Nodes, Node{
+				Name: name, Type: stringType(entry), Rejected: true, Error: reason,
+			})
+			continue
+		}
+
 		n, reason := buildNode(i, entry)
 		if reason != "" {
 			report.Rejected++

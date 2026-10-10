@@ -128,6 +128,12 @@ func speedTestGroup(callback unsafe.Pointer, group, options C.c_string) (out *C.
 			Error: err.Error(),
 		})
 	}
+
+	// A subscription's information entries are real proxies and would measure
+	// like one, and this run does not merely report - it picks the node the
+	// group connects through. Left in, "剩余流量：712.92 GB" can win a ranking
+	// and quietly become the node everything routes through.
+	targets = dropInformationNodes(targets)
 	if len(targets) == 0 {
 		return marshalJson(speedTestEnvelope{
 			OK:    false,
@@ -193,6 +199,20 @@ func speedTestGroup(callback unsafe.Pointer, group, options C.c_string) (out *C.
 		Best:    best,
 		Backup:  backup,
 	})
+}
+
+// dropInformationNodes removes the subscription's own account entries from a
+// group's measurable members. The order is kept, because a ranking that
+// reports on a subset has to report on the same subset the reader sees.
+func dropInformationNodes(targets []tunnel.SpeedTarget) []tunnel.SpeedTarget {
+	kept := targets[:0]
+	for _, t := range targets {
+		if probtest.InformationNode(t.Name) != "" {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	return kept
 }
 
 // monitorEnvelope is the single document monitorGroup hands to the JVM: the
