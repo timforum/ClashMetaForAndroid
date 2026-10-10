@@ -1,7 +1,6 @@
 ﻿package com.github.kr328.clash.service.probtest
 
 import android.content.Context
-import android.net.Uri
 import android.util.Base64
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.core.Clash
@@ -211,17 +210,23 @@ class ProbTestPipeline(private val context: Context) {
         coroutineScope {
             candidates.map { candidate ->
                 async(Dispatchers.IO) {
-                    val text = withTimeoutOrNull(DOWNLOAD_TIMEOUT_MS) {
-                        fetch(candidate.url)
+                    // A null answer here means the ceiling stopped the fetch.
+                    // A source that answered and failed carries a null document
+                    // inside a non-null answer, so the two stay apart: "gave up"
+                    // and "answered with nothing" point at different failures,
+                    // and reporting both as the first one sends whoever reads
+                    // the log after the wrong one.
+                    val answer = withTimeoutOrNull(DOWNLOAD_TIMEOUT_MS) {
+                        Downloaded(fetch(candidate.url))
                     }
 
-                    if (text == null && !candidate.url.isBlank()) {
+                    if (answer == null) {
                         Log.w("probtest: $candidate.url gave up after ${DOWNLOAD_TIMEOUT_MS}ms")
                     }
 
                     progress.incrementAndGet()
 
-                    candidate to text
+                    candidate to answer?.text
                 }
             }.awaitAll()
         }.forEach { (candidate, text) ->
@@ -254,6 +259,16 @@ class ProbTestPipeline(private val context: Context) {
             ruleFiles = template.ruleFiles,
             speedTest = ProbTestSpeedTest(enabled = true),
             speedTestConfig = speedConfig,
+        )
+
+        // Stated before the run rather than inferred from it afterwards: the
+        // number of nodes that fail a round is what the setting is meant to
+        // move, and without the figure beside it a round of timeouts cannot be
+        // told apart from one caused by a probe target that stopped answering.
+        Log.i(
+            "probtest: probing ${documents.size} documents, ${options.rounds} rounds" +
+                " ${options.roundGapMs / 1000}s apart, ${options.concurrency} at a time," +
+                " against ${options.testUrl.ifEmpty { "the core default" }}"
         )
 
         val envelope = Clash.probTest(documents, options) { progress ->
@@ -497,15 +512,11 @@ class ProbTestPipeline(private val context: Context) {
             }
         }
 
-        // A file the user picked from the phone, one URL per line, is the
-        // on-device counterpart of the inline list above: it keeps the worker
-        // from hard-coding every source and lets the pool grow without a new
-        // build.
-        for (line in readExtraSubFile(store.probtestExtraSubFile)) {
-            val url = line.trim()
-            if (url.isNotEmpty()) {
-                offer(url, url)
-            }
+        // The file the user picked on this phone, one URL per line: the on-device
+        // counterpart of the inline list above, which keeps the worker from
+        // hard-coding every source and lets the pool grow without a new build.
+        for (url in readExtraSubFile()) {
+            offer(url, url)
         }
 
         if (store.probtestIncludeImported) {
@@ -538,29 +549,15 @@ class ProbTestPipeline(private val context: Context) {
     }
 
     /**
-     * Reads the picked file and returns its non-empty lines. A missing,
-     * unreadable or permissioned file contributes nothing rather than failing
-     * the whole round, so a stale reference after the file was deleted is just
-     * skipped.
+     * The URLs in the file the user picked, if there is one.
+     *
+     * Read from the copy taken while the picker was up rather than from the
+     * content uri: the grant behind that uri belongs to the process that
+     * asked for it, so this process cannot open the file at all. Reading the
+     * copy is also what lets the picked file outlive the screen that chose it.
      */
-    private suspend fun readExtraSubFile(uriString: String): List<String> {
-        if (uriString.isBlank()) return emptyList()
-
-        return try {
-            val uri = Uri.parse(uriString)
-
-            withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    input.readAtMost(MAX_CANDIDATE_BYTES)
-                        .toString(Charsets.UTF_8)
-                        .lineSequence()
-                        .toList()
-                } ?: emptyList()
-            }
-        } catch (e: Exception) {
-            Log.w("probtest: could not read extra subscription file $uriString", e)
-            emptyList()
-        }
+    private suspend fun readExtraSubFile(): List<String> {
+        return withContext(Dispatchers.IO) { ExtraSubFile.read(context) }
     }
 
     private suspend fun fetch(url: String): String? {
@@ -713,6 +710,15 @@ class ProbTestPipeline(private val context: Context) {
         val branch: String,
         val path: String,
     )
+
+    /**
+     * A candidate download that finished, whether or not it produced a document.
+     *
+     * Only the [text] is ever null here. The wrapper exists so that "finished
+     * with nothing" stays distinguishable from "never finished", which a bare
+     * nullable string cannot express.
+     */
+    private class Downloaded(val text: String?)
 
     private companion object {
         const val ROUNDS = 3

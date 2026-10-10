@@ -1,6 +1,7 @@
 package com.github.kr328.clash
 
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.result.contract.ActivityResultContracts
 import com.github.kr328.clash.common.compat.startForegroundServiceCompat
 import com.github.kr328.clash.common.constants.Intents
@@ -9,11 +10,14 @@ import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.design.ProbTestSettingsDesign
 import com.github.kr328.clash.remote.Broadcasts
 import com.github.kr328.clash.service.ProbTestWorker
+import com.github.kr328.clash.service.probtest.ExtraSubFile
 import com.github.kr328.clash.service.probtest.ProbTestProgress
 import com.github.kr328.clash.service.probtest.Stage
 import com.github.kr328.clash.service.store.ServiceStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withContext
 
 class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
     override suspend fun main() {
@@ -23,6 +27,21 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
         )
 
         setContentDesign(design)
+
+        // A file picked before this build existed was stored as a uri and never
+        // copied, so the worker has nothing to read. Take the copy here, while
+        // the grant that opened it may still be alive. It usually is not - the
+        // screen has been closed since - and failing is expected then; the row
+        // is left showing the file so it can be picked again.
+        withContext(Dispatchers.IO) {
+            val uri = ServiceStore(this@ProbTestSettingsActivity).probtestExtraSubFile
+
+            if (uri.isNotBlank() && !ExtraSubFile.file(this@ProbTestSettingsActivity).isFile) {
+                val copied = ExtraSubFile.copy(this@ProbTestSettingsActivity, Uri.parse(uri))
+
+                Log.i("probtest: backfilled the picked file to ${copied ?: "nothing"}")
+            }
+        }
 
         while (isActive) {
             select<Unit> {
@@ -65,26 +84,33 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
                         }
                         ProbTestSettingsDesign.Request.PickExtraSubFile -> {
                             // A plain text file of subscription URLs, one per line.
-                            // The content uri is stored as a string so the worker
-                            // process can read the file back across processes.
+                            // The content is copied here, where the picker's grant
+                            // still reaches it: that grant belongs to this process
+                            // and to nothing else, so the worker could not open the
+                            // file later even with the persistable flag taken. The
+                            // uri is still stored so the row can name what was
+                            // picked, but the round reads the copy.
                             val uri = startActivityForResult(
                                 ActivityResultContracts.OpenDocument(),
                                 arrayOf("text/*", "application/octet-stream", "*/*"),
                             )
                             if (uri != null) {
-                                // The picker's read grant is temporary and dies with
-                                // the activity. The worker runs in the service
-                                // process and may start long after this screen is
-                                // gone, so persist the grant explicitly; without
-                                // it openInputStream() in the worker throws and
-                                // the file is silently skipped every round.
                                 runCatching {
                                     contentResolver.takePersistableUriPermission(
                                         uri,
                                         Intent.FLAG_GRANT_READ_URI_PERMISSION,
                                     )
                                 }.onFailure { e ->
+                                    // Not fatal on its own: the copy below does not
+                                    // need the grant to outlive this screen.
                                     Log.w("probtest: could not persist extra sub file uri $uri", e)
+                                }
+
+                                val copied = ExtraSubFile.copy(this@ProbTestSettingsActivity, uri)
+                                if (copied == null) {
+                                    Log.w("probtest: could not read the picked file $uri")
+                                } else {
+                                    Log.i("probtest: copied the picked file to $copied")
                                 }
 
                                 ServiceStore(this@ProbTestSettingsActivity).probtestExtraSubFile = uri.toString()
