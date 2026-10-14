@@ -185,7 +185,31 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					// reachability probes because it is the cheapest way to
 					// notice a dead exit: nothing else here needs to spend
 					// its read budget on a node that never answers.
-					delay, derr := n.Proxy.URLTest(ctx, testURL, expected)
+					//
+					// Capped, because "cheapest" only pays off if the cheap
+					// thing is also quick. The probe's own client allows 30
+					// seconds, which a node that never answers spends in
+					// full - while the limit this very result is judged
+					// against is [groupMaxDelayMs], 500ms by default. A node
+					// that answers in 600ms and one that never answers are
+					// dropped alike, so all but 600ms of that 30 second window
+					// is spent learning something the limit has already
+					// decided. Over a pool where most nodes are dead that is
+					// what makes a round take half an hour instead of five
+					// minutes.
+					//
+					// The cap sits well above the limit rather than just above
+					// it, and that gap is what keeps the delay history honest.
+					// URLTest records whether it answered: a node that is slow
+					// but alive stays inside the cap and is written down as
+					// alive with its real delay, to be dropped by the limit
+					// as a slow node. Tighten the cap towards the limit and
+					// those nodes start being written down as dead instead,
+					// which both misreports them and drops them from the
+					// groups that pick by delay.
+					latencyCtx, cancelLatency := context.WithTimeout(ctx, latencyProbeTimeout)
+					delay, derr := n.Proxy.URLTest(latencyCtx, testURL, expected)
+					cancelLatency()
 					if derr == nil {
 						// The number this run measured travels with the result even
 						// when it is the number that failed the node: the UI shows
@@ -272,6 +296,13 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 const (
 	gateStageLatency = "latency"
 )
+
+// latencyProbeTimeout caps the cheap stage of a live-group round. Six times
+// the latency limit it feeds, so a node that is slow but alive is still
+// recorded as alive and dropped for being slow, and only a node that cannot
+// answer at all is recorded as dead. Raising it towards the limit would trade
+// round time for a delay history that lies about which nodes work.
+const latencyProbeTimeout = 5 * time.Second
 
 // RankGroupOutcomes picks the default and the standby from a finished run.
 //

@@ -93,3 +93,17 @@ fun Context.sendProbTestFinished(published: Boolean, summary: String) {
 
     sendBroadcastSelf(intent)
 }
+
+/**
+ * Tells the UI process the per-node figures changed.
+ *
+ * The figures live in the multi-process service preferences because the worker
+ * in :background writes them, and a SharedPreferences instance in the UI
+ * process does not learn about a write another process made - the screen would
+ * keep showing the numbers from the last round it happened to load until the
+ * user switched tabs. One broadcast after a round closes that gap without
+ * polling for a value that changes every few minutes.
+ */
+fun Context.sendSpeedTestResultsChanged() {
+    sendBroadcastSelf(Intent(Intents.ACTION_SPEEDTEST_RESULTS_CHANGED))
+}

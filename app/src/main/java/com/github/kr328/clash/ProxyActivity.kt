@@ -13,6 +13,7 @@ import com.github.kr328.clash.core.patchSelectorPath
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
+import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.util.withClash
@@ -69,6 +70,14 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
                                 finish()
                             }
+                        }
+                        // A round in :background wrote new figures into the
+                        // multi-process preferences this process cannot see on
+                        // its own, so every tab is reloaded rather than only the
+                        // one on screen: the other tabs are one tap away and
+                        // would otherwise show the previous round until then.
+                        Event.SpeedTestResultsChanged -> {
+                            design.requests.send(ProxyDesign.Request.ReloadAll)
                         }
                         else -> Unit
                     }
@@ -144,6 +153,13 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                                 design.setSpeedTestRunning(index, false)
 
                                 if (serviceStore.speedTestGroups.isEmpty()) {
+                                    // Nothing is enabled, so nothing is on its
+                                    // way out: the names a pass flagged as gone
+                                    // would otherwise still be sitting there
+                                    // waiting to condemn a group the user turns
+                                    // back on.
+                                    serviceStore.speedTestMissingGroups = emptySet()
+
                                     SpeedTestReceiver.cancelNext(this@ProxyActivity)
                                     SpeedTestReceiver.cancelWatch(this@ProxyActivity)
                                 } else {
@@ -206,6 +222,16 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
             val top = envelope.results.firstOrNull { r -> r.name == best }
 
+            // The whole list, not just the winner: the proxy screen shows a
+            // figure beside every node the round measured, and this is the
+            // only moment those figures exist.
+            mergeResults(
+                store,
+                envelope.results.mapNotNull { r ->
+                    r.mbps?.takeIf { r.passed }?.let { r.name to it }
+                }.toMap()
+            )
+
             store.setSpeedTestSelection(
                 group,
                 SpeedTestSelection(
@@ -252,13 +278,35 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
             // takes over from here on the configured interval, and so does the
             // tighter watch of the node this run just connected through.
             SpeedTestReceiver.scheduleNext(this)
-            SpeedTestReceiver.scheduleWatch(this)
-        } catch (e: Exception) {
+            SpeedTestReceiver.scheduleWatch(this)        } catch (e: Exception) {
             design.showSpeedTestFailed()
         } finally {
             design.setSpeedTestRunning(index, false)
 
             design.requests.send(ProxyDesign.Request.Reload(index))
         }
+    }
+
+    /**
+     * Folds one round's figures into what is already stored.
+     *
+     * Merged rather than replaced: a pass that measures one group must not
+     * erase what the periodic pass over the others measured, and a node the
+     * round did not reach this time keeps the last figure anyone took, which
+     * is a number about that node rather than about this group.
+     */
+    private fun mergeResults(
+        store: ServiceStore,
+        measured: Map<String, Double>,
+    ) {
+        if (measured.isEmpty()) {
+            return
+        }
+
+        val merged = store.speedTestResults().mbps.toMutableMap()
+
+        measured.forEach { (name, mbps) -> merged[name] = mbps }
+
+        store.setSpeedTestResults(SpeedTestResults(merged, System.currentTimeMillis()))
     }
 }

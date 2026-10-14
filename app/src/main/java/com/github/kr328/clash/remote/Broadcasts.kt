@@ -27,6 +27,13 @@ class Broadcasts(private val context: Application) {
          */
         fun onProbTestProgress(progress: ProbTestState) {}
         fun onProbTestFinished(published: Boolean, summary: String) {}
+
+        /**
+         * A speed screening round wrote new per-node figures. Only the proxy
+         * screen shows them, so the default does nothing rather than making
+         * every activity reload a list of proxies it never displays.
+         */
+        fun onSpeedTestResultsChanged() {}
     }
 
     /**
@@ -119,6 +126,10 @@ class Broadcasts(private val context: Application) {
                         )
                     }
                 }
+                Intents.ACTION_SPEEDTEST_RESULTS_CHANGED ->
+                    receivers.forEach {
+                        it.onSpeedTestResultsChanged()
+                    }
             }
         }
     }
@@ -146,6 +157,7 @@ class Broadcasts(private val context: Application) {
                 addAction(Intents.ACTION_PROFILE_LOADED)
                 addAction(Intents.ACTION_PROBTEST_PROGRESS)
                 addAction(Intents.ACTION_PROBTEST_FINISHED)
+                addAction(Intents.ACTION_SPEEDTEST_RESULTS_CHANGED)
             })
 
             clashRunning = StatusClient(context).currentProfile() != null

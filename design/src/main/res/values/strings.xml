@@ -112,6 +112,7 @@
     <string name="new_profile">New Profile</string>
 
     <string name="delay">Delay</string>
+    <string name="speed">Speed</string>
     <string name="sort">Sort</string>
     <string name="default_">Default</string>
 
@@ -409,7 +410,11 @@
     <string name="probtest_delay_interval">Delay test interval (minutes)</string>
     <string name="probtest_delay_interval_summary">How often the candidate subscriptions go through the delay rounds</string>
     <string name="probtest_speed_interval">Speed test interval (minutes)</string>
-    <string name="probtest_speed_interval_summary">How often the groups toggled on the proxy screen are re-measured, at least 5</string>
+    <string name="probtest_speed_interval_summary">How often the groups toggled on the proxy screen are re-measured, at least 5. Lengthened on its own when a round takes longer than the value here.</string>
+    <string name="probtest_speed_interval_effective">In effect: every %1$s. %2$s.</string>
+    <string name="probtest_speed_interval_bound">%1$s nodes cannot be measured in less than %2$s</string>
+    <string name="probtest_speed_interval_effective_raised">In effect: every %1$s, not the %2$s asked for — a round has to finish before the next one starts. The last round took %3$s.</string>
+    <string name="probtest_speed_interval_effective_unknown">Not measured yet, so the value above is used as typed.</string>
     <string name="probtest_watch_interval">In-use node watch interval (minutes)</string>
     <string name="probtest_watch_interval_summary">How often the node each toggled group is connected through is re-checked, at least 1</string>
     <string name="probtest_interval">Interval in minutes</string>

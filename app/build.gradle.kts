@@ -111,8 +111,13 @@ task("downloadGeoFiles") {
 afterEvaluate {
     val downloadGeoFilesTask = tasks["downloadGeoFiles"]
 
+    // This task writes into a source directory rather than into its own output
+    // directory, so every task in the module that reads it has to be ordered
+    // after it. Matching by name was whack-a-mole: mergeAiReleaseAssets turned
+    // up first, then generateAiReleaseLintVitalReportModel, and there is no
+    // reason to believe the next one would not be found the same way.
     tasks.forEach {
-        if (it.name.startsWith("assemble")) {
+        if (it.name != "downloadGeoFiles") {
             it.dependsOn(downloadGeoFilesTask)
         }
     }

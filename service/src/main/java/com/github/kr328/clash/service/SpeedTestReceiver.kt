@@ -50,8 +50,17 @@ class SpeedTestReceiver : BroadcastReceiver() {
     companion object {
         /**
          * Arms the next round, or cancels it when no group is enabled any
-         * more. A minimum of five minutes keeps a mistyped interval from
-         * re-measuring the whole configuration in a loop.
+         * more.
+         *
+         * The period is not simply the setting: it is
+         * [ServiceStore.effectiveSpeedTestIntervalMinutes], which is the setting
+         * unless the last pass took longer than that. A pass over 174 nodes
+         * with most of them dead was measured at 36 minutes, so a five minute
+         * setting would fire every fifth minute of a round that is still
+         * running and leave the device measuring continuously. The setting
+         * says how often the reader would like this; this is what the device
+         * can actually do, and when the two disagree the device wins, because
+         * the alternative is not a faster answer but two rounds at once.
          *
          * Safe to call from the UI process: the alarm is held by the system
          * and the pending intent names this receiver explicitly, so delivery
@@ -73,9 +82,31 @@ class SpeedTestReceiver : BroadcastReceiver() {
                 return
             }
 
-            val delay = TimeUnit.MINUTES.toMillis(store.speedTestIntervalMinutes.coerceAtLeast(5))
+            val asked = store.speedTestIntervalMinutes
+                .coerceAtLeast(ServiceStore.MIN_SPEED_TEST_INTERVAL_MINUTES)
+            val effective = store.effectiveSpeedTestIntervalMinutes()
+            val basis = store.speedTestIntervalBasis()
+            val delay = TimeUnit.MINUTES.toMillis(effective)
 
-            Log.d("speedtest: next round in ${delay / 60000} minutes")
+            Log.d(
+                if (effective == asked) {
+                    "speedtest: next round in ${delay / 60000} minutes"
+                } else {
+                    // Said out loud, and said with its reason, because a reader
+                    // who typed 5 and is told 87 has no way to tell that the
+                    // number came from a measurement rather than from a
+                    // mistake.
+                    val why = if (basis == "structural") {
+                        "${store.speedTestRoundNodes} nodes cannot be measured " +
+                            "in less than ${store.structuralSpeedTestRoundMs() / 60000} minutes"
+                    } else {
+                        "the last round took longer than that"
+                    }
+
+                    "speedtest: next round in ${delay / 60000} minutes " +
+                        "(raised from $asked: $why)"
+                }
+            )
 
             alarm.set(AlarmManager.RTC, System.currentTimeMillis() + delay, intent)
         }

@@ -9,6 +9,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.github.kr328.clash.core.model.Proxy
+import com.github.kr328.clash.core.model.ProxySort
 import com.github.kr328.clash.core.model.TunnelState
 import com.github.kr328.clash.design.adapter.ProxyAdapter
 import com.github.kr328.clash.design.adapter.ProxyPageAdapter
@@ -30,7 +31,7 @@ class ProxyDesign(
     context: Context,
     overrideMode: TunnelState.Mode?,
     private val groupNames: List<String>,
-    uiStore: UiStore,
+    private val uiStore: UiStore,
     private val serviceStore: ServiceStore,
 ) : Design<ProxyDesign.Request>(context) {
     sealed class Request {
@@ -95,7 +96,7 @@ class ProxyDesign(
         parent: ProxyState,
         links: Map<String, ProxyState>
     ) {
-        adapter.updateAdapter(position, proxies, selectable, parent, links)
+        adapter.updateAdapter(position, sortedBySpeed(withSpeeds(proxies)), selectable, parent, links)
 
         adapter.states[position].urlTesting = false
 
@@ -104,6 +105,97 @@ class ProxyDesign(
         if (position == binding.pagesView.currentItem)
             refreshSpeedTestButton()
     }
+
+    /**
+     * Puts the throughput the last round measured on each node's second line,
+     * in place of the protocol.
+     *
+     * In place of, not after, the protocol: `ProxyView` cuts the second line
+     * at a pixel width with `breakText` and draws no ellipsis, so in the
+     * two-column layout - the one people actually use - there is room for
+     * about ten characters. `AnyTLS · 2.7 MB/s` renders as `AnyTLS · 2` and
+     * the figure is gone, which is worse than not having shown it. `2.7 Mbps`
+     * fits, and of the two it is the one being asked for; the protocol is the
+     * least useful thing on that card to somebody ranking by speed.
+     *
+     * A node nobody has a figure for keeps its protocol, so the two states are
+     * distinguishable at a glance: a row reading `3.6 Mbps` was measured, one
+     * reading `Http` was not.
+     *
+     * A group is left alone: it has no throughput of its own, only the nodes
+     * behind it, and printing a figure against a branch would be reporting a
+     * number that describes nothing.
+     */
+    private fun withSpeeds(proxies: List<Proxy>): List<Proxy> {
+        val speeds = serviceStore.speedTestResults().mbps
+
+        if (speeds.isEmpty()) {
+            return proxies
+        }
+
+        return proxies.map { proxy ->
+            val mbps = if (proxy.isGroup) null else speeds[proxy.name]
+
+            if (mbps == null) {
+                proxy
+            } else {
+                proxy.copy(subtitle = formatMbps(mbps))
+            }
+        }
+    }
+
+    /**
+     * Puts the fastest measured node at the top when the sort says so.
+     *
+     * The core cannot do this one: the figures live in the service
+     * preferences rather than anywhere in the proxy tree, so the core is asked
+     * for its ordinary order and the order is imposed here instead. It is
+     * applied after [withSpeeds] rather than before, which costs one lookup
+     * per proxy and saves keeping the two passes in step.
+     *
+     * A node with no figure sorts last rather than first. Ordering an unknown
+     * ahead of a measured node would claim it is the better of the two, which
+     * is the one thing a figure nobody took must not do; and it keeps the
+     * nodes a round has not reached yet visibly below the ones it cleared.
+     *
+     * Within the unknown group the core's order is left alone, so the list is
+     * still stable and does not shuffle between reloads.
+     */
+    private fun sortedBySpeed(proxies: List<Proxy>): List<Proxy> {
+        if (uiStore.proxySort != ProxySort.Speed) {
+            return proxies
+        }
+
+        val speeds = serviceStore.speedTestResults().mbps
+
+        if (speeds.isEmpty()) {
+            return proxies
+        }
+
+        return proxies.sortedWith(
+            compareByDescending<Proxy> { speeds[it.name] ?: 0.0 }
+        )
+    }
+
+    /**
+     * Always megabits, never a unit that changes with the magnitude, and
+     * without the space before it.
+     *
+     * Switching to MB/s above ten was tried and it lies: `2.9 Mbps` printed
+     * beside `3.6 MB/s` reads as the slower of the two when they are the same
+     * size, and a list is read by comparing its numbers. One unit for every
+     * row means a bigger number is a faster node, always. Mbps is also the
+     * unit the engine reports and the unit speedtest.net prints, so the figure
+     * can be checked against something outside this app.
+     *
+     * The space is the one character the two-column card cannot spare: that
+     * layout cuts the line at a pixel width with no ellipsis, and `19.3 Mbps`
+     * came out as `19.3 Mbp` beside a three digit delay. Dropping it is the
+     * whole difference between a figure that reads and one that does not, and
+     * the decimal is worth more than the space - rounding to whole megabits
+     * would print 19 and 20 for nodes a reader is trying to tell apart.
+     */
+    private fun formatMbps(mbps: Double): String = String.format("%.1fMbps", mbps)
 
     suspend fun requestRedrawVisible() {
         withContext(Dispatchers.Main) {

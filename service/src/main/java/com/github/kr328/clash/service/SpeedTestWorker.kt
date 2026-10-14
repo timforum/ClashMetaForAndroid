@@ -18,9 +18,12 @@ import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.ProxySort
 import com.github.kr328.clash.core.model.SpeedTestOptions
 import com.github.kr328.clash.core.patchSelectorPath
+import com.github.kr328.clash.core.model.SpeedTestEnvelope
+import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.model.SpeedTestWatchState
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.sendSpeedTestResultsChanged
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -41,6 +44,33 @@ import java.util.concurrent.TimeUnit
  */
 class SpeedTestWorker : BaseService() {
     private val jobs = mutableListOf<Job>()
+
+    /**
+     * Whether a screening pass is in flight in this process.
+     *
+     * The alarm is armed for a fixed period, and the pass it starts can easily
+     * take longer than that: a pool of 174 nodes with most of them dead sits
+     * out a full timeout each, which measured 36 minutes against a five
+     * minute period. Without this the next alarm would land while the first
+     * pass is still going and start a second one beside it, and the phone
+     * would measure two configurations at once for as long as that continues.
+     * The interval formula keeps that from being normal; this keeps it from
+     * happening at all when the estimate is still catching up.
+     */
+    @Volatile
+    private var screening = false
+
+    /**
+     * How many nodes the pass in flight has measured so far.
+     *
+     * Only the count matters here, not a name or a figure: the structural
+     * bound on the next interval is a function of how much work there is, and
+     * the pass itself is the only place that knows how much work there was.
+     * Reset at the top of [run] and read in its `finally`, so the number
+     * always describes one pass rather than the process's whole lifetime.
+     */
+    @Volatile
+    private var nodesMeasured = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -69,7 +99,13 @@ class SpeedTestWorker : BaseService() {
         super.onStartCommand(intent, flags, startId)
 
         if (intent?.action == Intents.ACTION_SPEEDTEST_REQUEST) {
-            jobs.add(launch { run() })
+            if (screening) {
+                Log.d("speedtest: a round is still running, this alarm is dropped")
+            } else {
+                screening = true
+
+                jobs.add(launch { run() })
+            }
         } else if (intent?.action == Intents.ACTION_SPEEDTEST_WATCH) {
             jobs.add(launch { watch() })
         }
@@ -78,9 +114,12 @@ class SpeedTestWorker : BaseService() {
     }
 
     private suspend fun run() {
+        val store = ServiceStore(applicationContext)
+        val startedAt = System.currentTimeMillis()
+        nodesMeasured = 0L
+
         try {
-            val store = ServiceStore(applicationContext)
-            val groups = store.speedTestGroups.sorted()
+            val groups = liveGroups(store)
 
             groups.forEachIndexed { index, group ->
                 updateProgress(
@@ -103,8 +142,95 @@ class SpeedTestWorker : BaseService() {
                 }
             }
         } finally {
+            // What the pass cost is what the next interval is derived from, so
+            // it is folded in before the alarm is armed: a round that took
+            // longer than the period it was given must lengthen that period
+            // now, not after another round has already overlapped this one.
+            store.recordSpeedTestRound(
+                System.currentTimeMillis() - startedAt,
+                nodesMeasured,
+            )
+
+            screening = false
+
             SpeedTestReceiver.scheduleNext(this)
         }
+    }
+
+    /**
+     * Drops the enabled groups the running configuration no longer has, and
+     * returns what is left.
+     *
+     * The toggle writes a name into a set and the name is all it keeps, so a
+     * profile update that renames or removes a group leaves the entry behind
+     * with nothing pointing at it. Every pass then measures a group that does
+     * not exist and answers "not found", forever, for a switch nobody can see
+     * and turn off. Reading the live names is the only honest test: the set is
+     * only meaningful as a subset of the groups the core is actually running.
+     *
+     * Two strikes, though, because the opposite failure is far worse than the
+     * one being fixed. A profile update swaps the configuration out from under
+     * a running core, and a pass that lands inside that window reads a list
+     * that is empty or half-built. Dropping on the first miss would answer
+     * that window by silently deleting every toggle the user had set, with no
+     * way to tell afterwards that they had ever been on. A group therefore has
+     * to be missing from two consecutive passes - at least five minutes apart -
+     * before it is believed gone, which no reload window lasts long enough to
+     * fake. The empty list is refused outright for the same reason: a core with
+     * no groups is a core mid-swap, not a configuration that lost them all.
+     *
+     * The ranking and the watch state go with a group that is dropped. They are
+     * keyed by the same name and nothing would ever read them again, so leaving
+     * them behind would grow the preferences file by a group per stale entry
+     * for as long as the profile kept moving.
+     *
+     * Cancelling the alarms is left to the caller's `scheduleNext`, which
+     * already stands both down when the set comes back empty.
+     */
+    private fun liveGroups(store: ServiceStore): List<String> {
+        val enabled = store.speedTestGroups
+
+        if (enabled.isEmpty()) {
+            return emptyList()
+        }
+
+        val configured = try {
+            Clash.queryGroupNames(excludeNotSelectable = false).toSet()
+        } catch (e: Throwable) {
+            // A bridge that cannot answer says nothing about which groups exist,
+            // so the set is left exactly as it was rather than judged against
+            // an empty list.
+            Log.w("speedtest: cannot list the running groups", e)
+
+            return enabled.sorted()
+        }
+
+        if (configured.isEmpty()) {
+            return enabled.sorted()
+        }
+
+        val missing = enabled - configured
+        val gone = missing.intersect(store.speedTestMissingGroups)
+
+        store.speedTestMissingGroups = missing - gone
+
+        val kept = enabled - gone
+
+        if (kept.size == enabled.size) {
+            return kept.sorted()
+        }
+
+        store.speedTestGroups = kept
+
+        gone.forEach { group ->
+            store.setSpeedTestSelection(group, null)
+            store.setSpeedTestWatchState(group, null)
+            store.setSpeedTestFailoverCursor(group, 0)
+
+            Log.d("speedtest: dropped '$group': not in the running configuration")
+        }
+
+        return kept.sorted()
     }
 
     /**
@@ -120,7 +246,7 @@ class SpeedTestWorker : BaseService() {
         try {
             val store = ServiceStore(applicationContext)
 
-            store.speedTestGroups.sorted().forEach { group ->
+            liveGroups(store).forEach { group ->
                 try {
                     if (watchGroup(store, group)) {
                         notifySwitched(store, group)
@@ -243,7 +369,8 @@ class SpeedTestWorker : BaseService() {
         }
 
         // The node in use stopped answering, stopped carrying, or answered
-        // slower than the limit: re-rank the group and move the selector.
+        // slower than the limit: hand the connection to the next node already
+        // known to work.
         //
         // The node the last switch left behind is off the table while the
         // cooldown lasts, otherwise two nodes that both drag would trade
@@ -253,19 +380,20 @@ class SpeedTestWorker : BaseService() {
             now - previous.switchedAt < WATCH_COOLDOWN_MS
         ) previous.switchedFrom else ""
 
-        if (!screen(store, group, avoid))
-            return false
+        val took = failover(store, group, current, avoid)
 
-        val switched = store.speedTestSelection(group) ?: return false
+        if (took.isEmpty()) {
+            return false
+        }
 
         store.setSpeedTestWatchState(
             group,
             SpeedTestWatchState(
-                node = switched.default,
+                node = took,
                 // The snapshot was taken before the switch, so the count of
                 // the node that just took over is where its window starts;
                 // traffic it carries from here on is what the next pass sees.
-                bytesAt = traffic.nodes.firstOrNull { it.name == switched.default }?.bytes ?: 0,
+                bytesAt = traffic.nodes.firstOrNull { it.name == took }?.bytes ?: 0,
                 atMs = now,
                 switchedFrom = current,
                 switchedAt = now,
@@ -276,6 +404,294 @@ class SpeedTestWorker : BaseService() {
     }
 
     /**
+     * Hands the connection to the next node already known to work, and returns
+     * the node it settled on. Empty when nothing could take over.
+     *
+     * This used to re-measure the whole group to find a replacement, and that
+     * is the wrong way round: picking a substitute is a question about who
+     * answers, and the answer is already standing in the per-node figures -
+     * every node the last round cleared the gate, fastest first. The node that
+     * just failed drops out of that order (its figure is removed the moment a
+     * probe fails), the next one is probed, and only that one is paid for.
+     *
+     * A full round over a group of this size costs 174 nodes twice over to
+     * replace one dead connection, and it does it every time: a connection
+     * that flapped twice in an hour spent 174 MiB each time, on a phone that
+     * may be streaming something else at the time. A candidate here costs a
+     * quarter of a megabyte through the same real gate, and a switch is never
+     * made on the strength of a stored number alone - the probe is what
+     * proves the traffic went through that node.
+     *
+     * Only the first few are tried, and each one that fails leaves the queue,
+     * so the next pass starts from a pool one node shorter rather than paying
+     * the same probe again.
+     *
+     * When there is no queue at all - nothing of this group has ever cleared
+     * the gate - it falls back to sweeping the group's own members instead of
+     * doing nothing. Standing still would leave a dead connection dead for a
+     * whole interval, and the cost of trying is the same few hundred
+     * kilobytes either way. It does *not* fall back to measuring the group:
+     * that is the 174 MiB this exists to avoid, and a sweep of the members
+     * will find a working one just as often as a sweep of everything would,
+     * for a hundredth of the data.
+     *
+     * The periodic round is what fills the queue properly again.
+     */
+    private suspend fun failover(
+        store: ServiceStore,
+        group: String,
+        failed: String,
+        avoid: String,
+    ): String {
+        val members = memberNames(group)
+
+        // Membership first, because the figures are kept per node rather than
+        // per group and every group shares them. That is right for reading -
+        // a node's throughput does not care which group reached it - and wrong
+        // for choosing a substitute, since only a member of *this* group can
+        // be switched to. Left unfiltered, a group whose own nodes happen not
+        // to be the fastest ones spends its candidates on nodes it cannot
+        // reach and leaves a dead connection standing, which is the one thing
+        // a watch exists to prevent.
+        val known = store.speedTestResults().mbps
+            .filterKeys { it in members && it != failed && it != avoid }
+            .entries
+            .sortedByDescending { it.value }
+
+        val queue = if (known.isEmpty()) {
+            // Nothing of this group has ever cleared the gate, so there is no
+            // ranking to walk. That is not an excuse to leave a dead
+            // connection dead for a whole interval: the members are still
+            // there, and asking the gate about a few of them costs the same
+            // bounded amount a walk would.
+            //
+            // The sweep starts where the last one stopped rather than at the
+            // top of the group every time. Starting at the top would probe the
+            // same dead nodes for as long as the pool stays broken - they
+            // never had a figure, so they never leave the queue, and a standby
+            // that does answer stays untouched behind them.
+            val pool = members.filter { it != failed && it != avoid }
+
+            if (pool.isEmpty()) {
+                emptyList()
+            } else {
+                val cursor = store.speedTestFailoverCursor(group)
+                val offset = cursor % pool.size
+                val window = List(minOf(FAILOVER_SCAN, pool.size)) {
+                    pool[(offset + it) % pool.size]
+                }
+
+                // Advanced by what was looked at rather than by the budget: a
+                // name the gate refuses is skipped over, not measured, and
+                // stopping the cursor short would walk past the very names
+                // this sweep exists to reach.
+                store.setSpeedTestFailoverCursor(group, cursor + window.size)
+
+                window
+            }
+        } else {
+            known.take(FAILOVER_SCAN).map { it.key }
+        }
+
+        // Candidates the gate refuses cost nothing - the refusal comes back
+        // before a byte is measured - so they are walked over rather than
+        // counted against the budget. A configuration that keeps a name the
+        // gate will not measure at the head of its groups would otherwise
+        // spend every pass on that one name and never reach a real node.
+        var measured = 0
+
+        for (candidate in queue) {
+            if (measured >= FAILOVER_CANDIDATES) {
+                break
+            }
+
+            val probe = Clash.speedTestGroup(
+                group,
+                SpeedTestOptions(
+                    rounds = 1,
+                    only = candidate,
+                    maxBytes = WATCH_PROBE_BYTES,
+                    skipReachability = true,
+                )
+            )
+
+            if (!probe.ok) {
+                // Not a member of this group any more, or the core will not
+                // measure it at all: either way nothing was learned and
+                // nothing was spent.
+                Log.d(
+                    "speedtest watch: $group: cannot probe '$candidate': " +
+                        probe.error.orEmpty()
+                )
+
+                continue
+            }
+
+            measured++
+
+            // The probe's own outcome goes into the standing figures, so a
+            // candidate that fails here leaves the queue instead of costing
+            // this probe again on every pass until the next full round. A
+            // candidate that passes joins the ranking the next failover walks.
+            recordResults(store, probe)
+
+            val outcome = probe.results.firstOrNull { it.name == candidate }
+
+            if (outcome == null || !outcome.passed) {
+                continue
+            }
+
+            val owner = outcome.owner.orEmpty()
+
+            if (owner.isEmpty()) {
+                // Nothing along the way can hold a selection - a loadbalance
+                // or an available group picks on its own - so there is nothing
+                // to move and the node is left alone rather than patched into
+                // a group it is not a member of.
+                Log.d("speedtest watch: $group: '$candidate' has no group that can be moved")
+
+                continue
+            }
+
+            // The probe measured one node of this group, so the route it came
+            // back with is the route to patch: hop by hop down to the group
+            // that actually holds it.
+            val moved = patchSelectorPath(
+                group,
+                candidate,
+                outcome.path ?: listOf(group),
+                { name -> Clash.queryGroup(name, ProxySort.Default) },
+                { from, name -> Clash.patchSelector(from, name) },
+            ) ?: continue
+
+            store.setSpeedTestSelection(
+                group,
+                SpeedTestSelection(
+                    default = candidate,
+                    backup = store.speedTestResults().mbps
+                        .filterKeys { it in members && it != candidate }
+                        .maxByOrNull { it.value }?.key
+                        .orEmpty(),
+                    mbps = outcome.mbps ?: 0.0,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
+
+            if (moved.isEmpty()) {
+                // The route already reaches it, so nothing was switched:
+                // claiming one would report a node change that never
+                // happened, though the node is healthy and the state is right.
+                Log.d("speedtest watch: $group: '$candidate' already carries the connection")
+
+                store.setSpeedTestFailoverCursor(group, 0)
+
+                return candidate
+            }
+
+            Log.d(
+                "speedtest watch: $group: '$failed' failed, switched to " +
+                    "'$candidate' via ${moved.joinToString(" -> ")}"
+            )
+
+            store.setSpeedTestFailoverCursor(group, 0)
+
+            return candidate
+        }
+
+        Log.w(
+            "speedtest watch: $group: '$failed' failed and none of " +
+                "$measured candidates answered; waiting for the next round"
+        )
+
+        return ""
+    }
+
+    /**
+     * Every leaf node reachable through [group], sub groups walked into.
+     *
+     * The core can already do this walk as part of a measurement, but asking
+     * it to measure is the expensive thing this whole change exists to avoid,
+     * and walking the tree in Kotlin costs a few lookups that answer
+     * immediately. A name that resolves to nothing yields no members rather
+     * than an error, because the caller is only ever narrowing a list it
+     * already has.
+     *
+     * Bounded twice over: by the same depth the core's own walk uses, and by a
+     * visited set, so a configuration that names a group inside itself costs
+     * nothing instead of looping.
+     */
+    private fun memberNames(group: String): Set<String> {
+        val members = mutableSetOf<String>()
+        val visited = mutableSetOf<String>()
+        val pending = ArrayDeque<Pair<String, Int>>()
+
+        pending.addLast(group to 0)
+
+        while (pending.isNotEmpty()) {
+            val (name, depth) = pending.removeLast()
+
+            if (!visited.add(name) || depth > MAX_GROUP_DEPTH) {
+                continue
+            }
+
+            Clash.queryGroup(name, ProxySort.Default).proxies.forEach { proxy ->
+                if (proxy.isGroup) {
+                    pending.addLast(proxy.name to depth + 1)
+                } else {
+                    members.add(proxy.name)
+                }
+            }
+        }
+
+        return members
+    }
+
+    /**
+     * Keeps the figures a round measured, so the proxy screen can show one
+     * beside every node instead of only beside the winner.
+     *
+     * Merged rather than replaced. A pass that measures one group must not
+     * erase what the others measured an hour ago, and the watch measures a
+     * single node every couple of minutes - replacing outright would empty the
+     * map minutes after it was filled. A node this round did measure has its
+     * old figure *removed* rather than kept, so a node that has since stopped
+     * passing stops showing a speed instead of showing the last good one for
+     * ever.
+     */
+    private fun recordResults(store: ServiceStore, envelope: SpeedTestEnvelope) {
+        val measured = envelope.results.filter { !it.name.isBlank() }
+
+        if (measured.isEmpty()) {
+            return
+        }
+
+        // Counted here rather than from the group's size: this is where the
+        // pass learns how much work it actually did, which is what the next
+        // interval is derived from before any of it has been timed.
+        nodesMeasured += measured.size
+
+        val previous = store.speedTestResults()
+        val merged = previous.mbps.toMutableMap()
+
+        measured.forEach {
+            if (it.passed) {
+                merged[it.name] = it.mbps ?: 0.0
+            } else {
+                merged.remove(it.name)
+            }
+        }
+
+        store.setSpeedTestResults(SpeedTestResults(merged, System.currentTimeMillis()))
+
+        // Sent only when the figures actually moved: a group whose nodes all
+        // failed this round changes nothing on screen, and a reload per round
+        // would repaint six hundred proxy cards to say the same thing.
+        if (merged != previous.mbps) {
+            sendSpeedTestResultsChanged()
+        }
+    }
+
+    /**
      * Measures one group, refreshes its standing ranking, and moves the
      * selector only when the current default has stopped clearing the gate.
      *
@@ -283,8 +699,7 @@ class SpeedTestWorker : BaseService() {
      * user about the failover. [avoid] names a node that must not be picked
      * even though it passed, which is how the watch keeps a node it just
      * switched away from from being chosen again the next moment.
-     */
-    private suspend fun screen(store: ServiceStore, group: String, avoid: String = ""): Boolean {
+     */    private suspend fun screen(store: ServiceStore, group: String, avoid: String = ""): Boolean {
         // Two rounds: a single lucky transfer must not decide which node the
         // whole app connects through when nobody is watching. The worst round
         // is the score, so the ranking needs both rounds to hold up.
@@ -308,6 +723,11 @@ class SpeedTestWorker : BaseService() {
         val passed = envelope.results.filter { it.passed }
         val passedNames = passed.map { it.name }.toSet()
         val best = envelope.best
+
+        // Every node the round measured, not only the one that won. The ranking
+        // needs the winner; the reader needs the rest, and this is the only
+        // moment the figures exist.
+        recordResults(store, envelope)
 
         if (best == null || best.isEmpty() || best !in passedNames)
             return false
@@ -491,6 +911,24 @@ class SpeedTestWorker : BaseService() {
         // which is what keeps two nodes that both drag from trading places
         // every pass.
         private const val WATCH_COOLDOWN_MS = 10L * 60L * 1000L
+        // How far down the known-good queue one failover reaches. Three is
+        // three quarter-megabyte probes in the worst case, against a full
+        // round's hundreds of megabytes; a candidate that fails leaves the
+        // queue, so a pass that finds nothing just starts further down next
+        // time rather than paying for the same refusals again.
+        private const val FAILOVER_CANDIDATES = 3
+
+        // How many names one failover looks at to find that many worth
+        // measuring. Larger than the budget because names the core refuses
+        // cost nothing - the refusal returns before any transfer - so walking
+        // over them is free, while stopping at the budget would spend the
+        // whole allowance on whatever the configuration happens to list first.
+        private const val FAILOVER_SCAN = 12
+
+        // How deep a sub group chain is followed when collecting the members a
+        // failover may choose from. Matches the core's own bound on the walk a
+        // measurement does.
+        private const val MAX_GROUP_DEPTH = 8
     }
 
     override fun onBind(intent: Intent?): IBinder {
