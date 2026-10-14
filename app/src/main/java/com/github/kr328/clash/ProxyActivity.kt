@@ -16,6 +16,7 @@ import com.github.kr328.clash.service.SpeedTestReceiver
 import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.logSpeedTestStages
 import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -207,10 +208,20 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                 SpeedTestOptions()
             )
 
+            val startedAt = System.currentTimeMillis()
+
             val envelope = SpeedTestJson.decodeFromString(
                 SpeedTestEnvelope.serializer(),
                 withClash { speedTestGroup(group, options) }
             )
+
+            // The same breakdown the periodic round prints. A reader who
+            // pressed the button is the one most likely to be looking at a pool
+            // that is costing this app half an hour a round, and without this
+            // they cannot tell whether the latency cap is what is spending it.
+            if (envelope.ok) {
+                logSpeedTestStages(group, envelope, System.currentTimeMillis() - startedAt)
+            }
 
             val best = envelope.best
 
