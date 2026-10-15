@@ -60,8 +60,13 @@ type SpeedOptions struct {
 	// latency rounds left standing, as before.
 	Enabled bool `json:"enabled"`
 	// FloorMbps is the steady-state throughput a node must sustain. The
-	// default of 0.5 is what YouTube's 240p needs; a node that cannot even
-	// carry that has no business in a published configuration.
+	// default is below what YouTube's 240p asks for, on purpose: measured over
+	// a round of sixteen sources, fifteen nodes were alive, connected within
+	// the delay limit and dropped only for landing under 0.5 Mbps - a fifth of
+	// everything that passed the latency rounds. A pool that thin is worth
+	// more with those fifteen in it than with a bar nobody clears, but the
+	// nodes admitted below 0.5 will not hold a 240p stream, so they are the
+	// first to go if the bar is raised again.
 	FloorMbps float64 `json:"floorMbps,omitempty"`
 	// MaxBytes caps how much one throughput measurement may download. The
 	// measurement stops early once the floor is comfortably cleared, so this
@@ -171,7 +176,7 @@ func (p SpeedProbe) probeEnabled() bool {
 }
 
 const (
-	defaultSpeedFloorMbps   = 0.5
+	defaultSpeedFloorMbps   = 0.3
 	defaultSpeedMaxBytes    = 1 << 20 // 1 MiB
 	defaultSpeedMaxTime     = 8 * time.Second
 	defaultSpeedConcurrency = 6

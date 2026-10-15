@@ -54,7 +54,13 @@ func buildNode(idx int, raw any) (*node, string) {
 
 	proxy, err := parseSafe(entry)
 	if err != nil {
-		return nil, fmt.Sprintf("parse: %s", err.Error())
+		// The type goes in because the count does not explain itself: a round
+		// reported 586 nodes lost to "parse" out of 986, and nothing in that
+		// says whether the core cannot read one protocol, whether those entries
+		// were malformed, or whether the number is one source's worth of
+		// something unsupported. Naming the type puts it in the log's own
+		// grouping, so it turns up with the rest of the unnamed failures.
+		return nil, fmt.Sprintf("parse %s: %s", typ, err.Error())
 	}
 
 	return &node{name: name, typ: typ, proxy: proxy}, ""
