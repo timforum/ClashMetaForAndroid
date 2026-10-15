@@ -172,6 +172,23 @@ class ProbTestPipeline(private val context: Context) {
             return ProbTestOutcome(false, "No candidate subscription configured")
         }
 
+        // What this round will actually screen, named rather than merely
+        // counted. The pool is assembled from four sources and two of them can
+        // silently contribute nothing - a source on the upload's own origin is
+        // refused to keep the published result out of its own input, and the
+        // picked file is read through a copy that may not have survived. A
+        // round that publishes a handful of nodes out of a thousand looks
+        // like a strict gate, and without this line there is nothing in the
+        // log that distinguishes that from a pool that was never fed.
+        //
+        // URLs are reduced to their host and path shape, never printed whole:
+        // these are subscription links and they carry the credentials that
+        // authorise them.
+        Log.i(
+            "probtest: screening ${candidates.size} source(s): " +
+                candidates.joinToString { redactedUrl(it.url) }
+        )
+
         // Remembered here rather than when the field is edited, so a target only
         // earns a place once a round has actually measured against it. A URL
         // typed and abandoned would otherwise take a slot from one that works.
@@ -532,7 +549,69 @@ class ProbTestPipeline(private val context: Context) {
             }
         }
 
+        // Last word on the pipeline's own output. The origin check in [offer]
+        // already keeps a source that shares a host with the upload out of the
+        // round, and that is the rule that matters, but it holds only because
+        // this deployment publishes to the same host the reader fetches the
+        // result from. Move the upload somewhere else - a mirror, a bucket, a
+        // second origin - and the profile carrying the previous result becomes
+        // an ordinary imported subscription and feeds itself back in, where a
+        // round screens yesterday's survivors and republishes them, which is
+        // how a pool that should shrink instead holds its ground.
+        //
+        // So the result is named directly as well as by host: a profile whose
+        // source is the upload target itself is refused whatever host it is
+        // served from. Kept last so it also covers a primary or an extra entry
+        // that reached here by a route the origin rule missed.
+        if (destination != null) {
+            candidates.removeAll { sameTarget(it.url, uploadUrl) }
+        }
+
         return candidates
+    }
+
+    /**
+     * Whether [url] is the very document this round publishes to, compared
+     * whole - scheme, host, port, path and query - rather than by host alone.
+     *
+     * Trailing slashes and case in the scheme and host are forgiven because
+     * those never change what a server serves; the path and query are not,
+     * since two documents on one host are two documents.
+     */
+    private fun sameTarget(url: String, uploadUrl: String): Boolean {
+        val a = runCatching { URI(url.trim()) }.getOrNull() ?: return false
+        val b = runCatching { URI(uploadUrl.trim()) }.getOrNull() ?: return false
+
+        fun norm(u: URI) = listOf(
+            u.scheme?.lowercase(),
+            u.host?.lowercase(),
+            u.port.takeIf { it >= 0 }?.toString() ?: "",
+            u.path.orEmpty().trimEnd('/'),
+            u.query.orEmpty(),
+        )
+
+        return norm(a) == norm(b)
+    }
+
+    /**
+     * A URL reduced to what identifies the source without carrying its
+     * credential: scheme, host and the first path segment, with any query or
+     * fragment dropped.
+     *
+     * A subscription link is a secret - the path or the query on it is the
+     * token the server checks - so it must never be written to a log that gets
+     * attached to a bug report or pasted into a chat. The host is enough to
+     * tell one source from another, and where there is only a token on the
+     * root the source is named by its host, which is what a reader is asking
+     * for anyway.
+     */
+    private fun redactedUrl(url: String): String {
+        val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return "<unparsable>"
+
+        val host = uri.host ?: return "<no host>"
+        val first = uri.path.orEmpty().trim('/').substringBefore('/')
+
+        return if (first.isEmpty()) "$host/" else "$host/$first"
     }
 
     /**

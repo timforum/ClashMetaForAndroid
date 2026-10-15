@@ -404,6 +404,8 @@
     <string name="probtest_extra_sub_file">Extra subscriptions file</string>
     <string name="probtest_extra_sub_file_summary">Tap to pick a file, one URL per line</string>
     <string name="probtest_extra_sub_file_set">Using file: %1$s</string>
+    <string name="probtest_extra_sub_file_unreadable">%1$s could not be read — pick it again</string>
+    <string name="probtest_extra_sub_file_unreadable_toast">Could not read the picked file. Pick it again.</string>
     <string name="probtest_schedule">Schedule</string>
     <string name="probtest_intervals">Interval settings</string>
     <string name="probtest_intervals_summary">How often each screening pass repeats</string>

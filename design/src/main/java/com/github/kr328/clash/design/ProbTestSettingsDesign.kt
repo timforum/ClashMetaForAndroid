@@ -3,12 +3,14 @@ package com.github.kr328.clash.design
 import android.content.Context
 import android.net.Uri
 import android.view.View
+import android.widget.Toast
 import com.github.kr328.clash.design.databinding.DesignSettingsCommonBinding
 import com.github.kr328.clash.design.preference.*
 import com.github.kr328.clash.design.util.applyFrom
 import com.github.kr328.clash.design.util.bindAppBarElevation
 import com.github.kr328.clash.design.util.layoutInflater
 import com.github.kr328.clash.design.util.root
+import com.github.kr328.clash.service.probtest.ExtraSubFile
 import com.github.kr328.clash.service.probtest.ProbTestProgress
 import com.github.kr328.clash.service.probtest.Stage
 import com.github.kr328.clash.service.store.ServiceStore
@@ -159,13 +161,44 @@ class ProbTestSettingsDesign(
     private lateinit var extraSubFileRow: ClickablePreference
 
     /**
+     * Says the picked file could not be read, rather than leaving the row to
+     * speak for itself.
+     *
+     * The failure is invisible otherwise: the picker succeeded, the tap
+     * succeeded, and what the reader is left with is a list of sources that
+     * does not contain the one they just added. Said here, it is the one thing
+     * on the screen that explains it.
+     */
+    fun showExtraSubFileUnreadable() {
+        Toast.makeText(context, R.string.probtest_extra_sub_file_unreadable_toast, Toast.LENGTH_LONG)
+            .show()
+    }
+
+    /**
      * Shows the file the user picked as the "Extra subscriptions" source, or
      * the hint when none is set. The picker hands back a content uri, so the
      * row reports the file name rather than the raw uri.
+     *
+     * A name on its own is a claim the screen cannot back up. The round reads
+     * a copy taken while the picker's grant was alive, and a file picked under
+     * an older build has a uri and no copy - the grant that would have let one
+     * be taken is long dead, and every visit to this screen retries and fails.
+     * Reporting the file name anyway is how a reader ends up believing a source
+     * is feeding the round when not one of its lines is: the row looks
+     * configured, the candidate list is short by two, and nothing on screen
+     * says the two facts are related. So the row distinguishes "picked, and the
+     * content is here" from "picked, and the content could not be read".
      */
     fun updateExtraSubFile(uri: String?) {
         extraSubFileRow.summary = when {
             uri.isNullOrBlank() -> context.getString(R.string.probtest_extra_sub_file_summary)
+
+            !ExtraSubFile.file(context).isFile -> {
+                val name = Uri.parse(uri).lastPathSegment ?: uri
+
+                context.getString(R.string.probtest_extra_sub_file_unreadable, name)
+            }
+
             else -> {
                 val name = Uri.parse(uri).lastPathSegment ?: uri
                 context.getString(R.string.probtest_extra_sub_file_set, name)

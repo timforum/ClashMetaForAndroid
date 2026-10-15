@@ -107,17 +107,28 @@ class ProbTestSettingsActivity : BaseActivity<ProbTestSettingsDesign>() {
                                 }
 
                                 val copied = ExtraSubFile.copy(this@ProbTestSettingsActivity, uri)
+                                val store = ServiceStore(this@ProbTestSettingsActivity)
+
                                 if (copied == null) {
+                                    // Nothing was stored, because there is
+                                    // nothing to store. Keeping the uri would
+                                    // leave the row naming a file the round
+                                    // cannot read, which is the one state
+                                    // nothing on screen can explain: the
+                                    // candidate list comes up short and the
+                                    // settings look complete. Forgetting it
+                                    // leaves the row back at its hint, which
+                                    // is a thing the reader can act on.
                                     Log.w("probtest: could not read the picked file $uri")
+
+                                    store.probtestExtraSubFile = ""
+                                    design?.updateExtraSubFile(null)
+                                    design?.showExtraSubFileUnreadable()
                                 } else {
                                     Log.i("probtest: copied the picked file to $copied")
-                                }
 
-                                ServiceStore(this@ProbTestSettingsActivity).probtestExtraSubFile = uri.toString()
-                                design?.let {
-                                    // Rebuild the screen so the row shows the new file name
-                                    // and the stored value is re-read from the store.
-                                    it.updateExtraSubFile(uri.toString())
+                                    store.probtestExtraSubFile = uri.toString()
+                                    design?.updateExtraSubFile(uri.toString())
                                 }
                             }
                         }
