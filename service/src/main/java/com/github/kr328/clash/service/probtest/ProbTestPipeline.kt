@@ -104,6 +104,117 @@ data class ProbTestOutcome(
  * plain HTTP client and the screening happens through `Clash.probTest`, which
  * builds proxies directly instead of calling into `hub/executor`.
  */
+/**
+ * What kind of failure a node's error describes, coarsely enough that a pool of
+ * a thousand nodes collapses into a handful of buckets.
+ *
+ * The order matters: the first match wins, so the conditions that would make
+ * the whole device the problem are tested before the ones that are about the
+ * node. "too many open files" and a socket exhaustion in any other wording come
+ * first, because a round that hit either was never measuring nodes at all and
+ * everything after it is an artefact.
+ */
+private fun failureKind(error: String?): String {
+    val message = error?.lowercase().orEmpty()
+
+    // The gate names the probe it stopped at, so a node that answered the
+    // latency rounds and then failed on YouTube reads differently from one that
+    // never answered at all - kept for last so a specific wording above wins.
+    val stage = message.substringBefore(':').trim()
+    val stageName = if (stage.isNotEmpty() && stage.length <= 16 &&
+        stage.none { it.isWhitespace() }
+    ) {
+        stage
+    } else {
+        "other"
+    }
+
+    return when {
+        message.contains("too many open files") ||
+            message.contains("file table overflow") ||
+            message.contains("cannot allocate") ||
+            (message.contains("socket") && message.contains("limit")) -> "socket-exhausted"
+
+        message.contains("connection reset") -> "reset"
+        message.contains("i/o timeout") || message.contains("timed out") -> "timeout"
+        message.contains("no such host") -> "dns"
+        message.contains("refused") -> "refused"
+        message.contains("deadline exceeded") || message.contains("did not answer") -> "no-answer"
+        message.contains("above") && message.contains("limit") -> "over-delay-limit"
+
+        else -> stageName
+    }
+}
+
+/** How many failure kinds one round reports, so a long tail cannot bury the head. */
+private const val FAILURE_KINDS_LOGGED = 8
+
+/** The bucket a message falls into when no named kind claims it. */
+private const val UNNAMED_KIND = "other"
+
+/** How many of those to spell out, which is enough to see a new shape appear. */
+private const val UNNAMED_SIGNATURES_LOGGED = 6
+
+/** An address, which differs for every node and says nothing about the failure. */
+private val IPV4_ADDRESS = Regex("""\d{1,3}(?:\.\d{1,3}){3}""")
+
+/** Any bare number: a port, a port count, a duration, a status code. */
+private val BARE_NUMBER = Regex("""\b\d+\b""")
+
+/**
+ * A failure message with the per-node detail folded away, so messages that mean
+ * the same thing group together.
+ *
+ * What is removed is exactly what identifies the node - its address, its port,
+ * the lengths and timings of one particular attempt - because those differ in
+ * every message and would make a thousand distinct failures read as a thousand
+ * distinct problems. What is left is the shape of the complaint, which is the
+ * part a reader can act on. The result is not a secret: it still names protocols
+ * and ports, the same things the core's own logging prints.
+ */
+private fun errorSignature(error: String?): String =
+    BARE_NUMBER
+        .replace(IPV4_ADDRESS.replace(error.orEmpty().lowercase(), "<ip>"), "<n>")
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+        .take(SIGNATURE_LENGTH)
+
+/** Long enough for a message to be told apart, short enough to stay one line. */
+private const val SIGNATURE_LENGTH = 64
+
+/** The delay and the limit the core compared it against, out of a rejection. */
+private val OVER_LIMIT_DELAY = Regex("""delay (\d+)ms above (\d+)ms limit""")
+
+/**
+ * A band of delays above the limit, expressed as multiples of the limit so the
+ * bands mean the same thing whichever limit happens to be in force.
+ *
+ * The first band ends at 1.6, which is where a 500ms limit's obvious
+ * alternative - 800ms - lands, so it is the band that settles the question of
+ * whether raising the line would admit a cluster or a tail.
+ */
+private val DELAY_BANDS = listOf(
+    DelayBand(1.0, 1.6),
+    DelayBand(1.6, 2.5),
+    DelayBand(2.5, 4.0),
+    DelayBand(4.0, null),
+)
+
+/** One band above the limit. A null upper bound means the band has no ceiling. */
+private data class DelayBand(val from: Double, val to: Double?) {
+    fun holds(delayMs: Long, limitMs: Long): Boolean {
+        val low = limitMs * from
+        return delayMs >= low && (to == null || delayMs <= limitMs * to)
+    }
+
+    /** The band in milliseconds, so the numbers can be read without arithmetic. */
+    fun label(limitMs: Long): String {
+        val low = (limitMs * from).toInt()
+        val high = to?.let { (limitMs * it).toInt() }
+        return if (high == null) ">$low" else "$low-$high"
+    }
+}
+
 class ProbTestPipeline(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -294,7 +405,22 @@ class ProbTestPipeline(private val context: Context) {
         )
 
         val envelope = Clash.probTest(documents, options) { progress ->
-            Log.d("probtest round ${progress.round}/${progress.rounds} passed=${progress.passed} failed=${progress.failed}")
+            // One shape for every stage would have been shorter, but the gate
+            // borrows the latency rounds' numbers on the way through, so
+            // "round 3/3 passed=0 failed=1" lands after the last round has
+            // already been reported and reads as a fourth pass over screening
+            // survivors that were still being measured. Name the stage.
+            if (progress.stage == "speedtest") {
+                Log.d(
+                    "probtest speed gate ${progress.done}/${progress.total}" +
+                        " passed=${progress.passed} failed=${progress.failed}"
+                )
+            } else {
+                Log.d(
+                    "probtest round ${progress.round}/${progress.rounds}" +
+                        " passed=${progress.passed} failed=${progress.failed}"
+                )
+            }
 
             onProgress(
                 ProbTestProgress(
@@ -316,7 +442,83 @@ class ProbTestPipeline(private val context: Context) {
 
         val report = envelope.report
         val survived = report?.survivors ?: 0
+        val total = report?.total ?: 0
         val configuration = envelope.configuration
+
+        // Why the round lost what it lost, counted by kind rather than told in
+        // totals. Two rounds measured here came out the same way - over a
+        // thousand candidates, four or one survivor - and the per-round counts
+        // cannot say which of two very different things happened: a probe target
+        // that started refusing after the first round's worth of requests, or
+        // nodes whose own servers stopped answering. They look identical from
+        // the outside, a cliff between round one and round two, and they call
+        // for opposite fixes - one is the target's, the other's is the pool's.
+        //
+        // The messages separate them. A refused target reads as a reset or a
+        // status the transport could not use; a node whose server gave up reads
+        // as a read or write to the node's own address; and a device that ran
+        // out of sockets mid-round says so outright, which looks exactly like a
+        // dead pool from the outside and is not one at all.
+        val failures = report?.nodes?.filter { !it.error.isNullOrBlank() }.orEmpty()
+
+        failures
+            .groupingBy { failureKind(it.error) }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(FAILURE_KINDS_LOGGED)
+            .takeIf { it.isNotEmpty() }
+            ?.let { kinds ->
+                Log.i(
+                    "probtest: ${survived} of ${total} survived; failures by kind " +
+                        kinds.joinToString { "${it.key}=${it.value}" }
+                )
+            }
+
+        // The nodes that answered and were refused, and by how much. These are
+        // the only losses in the round that a decision could recover: a node
+        // that never answered is lost to the network, while a node that
+        // answered above the limit is lost to a number, and the number is
+        // chosen. Which number is defensible depends entirely on the shape of
+        // this pile - a hundred nodes just over the line mean the line is
+        // drawn through a working cluster, while a hundred spread from one to
+        // ten seconds mean there is nothing there worth keeping and raising the
+        // line would only admit the tail. So say where they sit relative to it.
+        failures.mapNotNull { OVER_LIMIT_DELAY.find(it.error ?: "")?.groupValues?.get(1)?.toLongOrNull() }
+            .takeIf { it.isNotEmpty() }
+            ?.let { overLimit ->
+                val limit = options.maxDelayMs
+                Log.i(
+                    "probtest: ${overLimit.size} node(s) answered over the ${limit}ms limit; " +
+                        "relative to it " +
+                        DELAY_BANDS.joinToString { band ->
+                            "${band.label(limit)}=${overLimit.count { band.holds(it, limit) }}"
+                        }
+                )
+            }
+
+        // The buckets above are a list someone wrote down in advance, so
+        // whatever they do not name lands in one anonymous bucket - and on the
+        // round that produced this line that bucket held a seventh of everything
+        // lost. A count with no name is the same silence as no count at all.
+        // Group those by what the message says, with the parts that differ per
+        // node folded away, so the remainder is readable without being
+        // predictable: whatever shows up here is by definition the part of the
+        // failure space nobody thought of.
+        failures
+            .filter { failureKind(it.error) == UNNAMED_KIND }
+            .groupingBy { errorSignature(it.error) }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(UNNAMED_SIGNATURES_LOGGED)
+            .takeIf { it.isNotEmpty() }
+            ?.let { rest ->
+                Log.i(
+                    "probtest: unnamed failures by message " +
+                        rest.joinToString { "${it.value}x ${it.key}" }
+                )
+            }
 
         if (!envelope.ok || configuration == null) {
             return ProbTestOutcome(false, envelope.error ?: "Screening failed", report)

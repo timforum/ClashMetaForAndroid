@@ -179,8 +179,17 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 
 	maxDelay := effectiveMaxDelayMs(opt)
 
-	for _, n := range eligible {
-		if ctx.Err() != nil {
+	for i, n := range eligible {
+		if err := ctx.Err(); err != nil {
+			// A node that was never handed to a probe has neither passed nor
+			// failed, and the tally counts everything not failed as still
+			// running. So a cancelled round reports the nodes it never looked
+			// at as though they had survived it. Record the cancellation on
+			// them: the round still errors out, but the count it printed while
+			// it died no longer claims survivors it did not test.
+			for _, skipped := range eligible[i:] {
+				markFailed(skipped, err.Error())
+			}
 			break
 		}
 
