@@ -3,12 +3,15 @@ package probtest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 )
 
 type node struct {
@@ -19,6 +22,11 @@ type node struct {
 	delays  []int
 	failed  bool
 	lastErr string
+	// note carries something worth saying about a node that was kept anyway:
+	// today, that the reachability probe could not open the site from its exit.
+	// It travels into the report so a published node is never quietly
+	// indistinguishable from one that answered everything asked of it.
+	note string
 	// speedMbps and speedTier are set by the speed gate for nodes that
 	// cleared it.
 	speedMbps float64
@@ -178,12 +186,89 @@ func probeRounds(
 	return survivors, nil
 }
 
+// probeRetryBackoff is the pause before the single retry of a probe that never
+// produced an answer.
+const probeRetryBackoff = 500 * time.Millisecond
+
+// probeRetrySlack is the margin added to the delay limit when deciding how
+// long that retry may wait.
+const probeRetrySlack = 500 * time.Millisecond
+
+// probeRetryDeadline is how long the retry of a silent probe may wait, and it
+// is deliberately far shorter than a full probe. URLTest's delay is the time
+// to the answer, so a retry that answers after the delay limit is dropped by
+// the same arithmetic that dropped the first attempt: every node that could
+// have survived a full-length retry survives this one as well, and the ones
+// that could not are merely waited for more slowly. The round's verdict is
+// unchanged; only its cost is.
+func probeRetryDeadline(opt Options, maxDelayMs int64) time.Duration {
+	d := time.Duration(maxDelayMs)*time.Millisecond + probeRetrySlack
+	if d > opt.RoundTimeout {
+		return opt.RoundTimeout
+	}
+	return d
+}
+
+// retryableProbeFailure decides whether a failed probe is worth asking once
+// more.
+//
+// A round that loses most of its candidates to a network that drops
+// connections cannot tell a dead node from a dropped one, and on a filtered
+// link - where a burst of parallel dials is exactly what provokes the drop -
+// the second ask is what separates the two. It stays a single ask, and the
+// second sample is judged by the same delay limit as the first.
+//
+// Definitive answers are not retried. The server refused the account, the
+// target answered 4xx/5xx, the protocol rejected the handshake - those are the
+// exit's own verdict, and asking again spends a probe slot to hear the same
+// thing.
+func retryableProbeFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, definitive := range []string{
+		"need auth",
+		"unexpected status",
+		"Forbidden",
+		"Bad Request",
+		"Bad Gateway",
+	} {
+		if strings.Contains(s, definitive) {
+			return false
+		}
+	}
+	return true
+}
+
+// needsResample decides whether a round has to ask a node again, and the rule
+// it encodes is that a round keeps the fastest sample it obtained.
+//
+// A probe that never answered is worth one more ask, and so is an answer that
+// missed the delay limit: the limit sits on the noise floor, and the round that
+// produced this code watched a node measured at 375ms and 374ms lose because
+// its third sample came back at 1498ms. Re-asking once lets the round report
+// the sample it got rather than the one it happened to get last, and it does
+// not relax the limit - a node whose second sample also misses is dropped
+// exactly as the first one was.
+func needsResample(err error, delay uint16, maxDelayMs int64) bool {
+	if err != nil {
+		return retryableProbeFailure(err)
+	}
+	return maxDelayMs > 0 && int64(delay) > maxDelayMs
+}
+
 // probeOnce probes every given node concurrently within the concurrency cap.
 func probeOnce(ctx context.Context, eligible []*node, opt Options, expected utils.IntRanges[uint16]) error {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, opt.Concurrency)
 
 	maxDelay := effectiveMaxDelayMs(opt)
+
+	// A sample that is unusable, by going silent or by answering over the delay
+	// limit, is asked once more, and these count how often that mattered. See
+	// retryableProbeFailure.
+	var resampled, saved int64
 
 	for i, n := range eligible {
 		if err := ctx.Err(); err != nil {
@@ -206,6 +291,18 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 			defer wg.Done()
 			defer func() { <-sem }()
 
+			// Every eligible node is probed on its own, including several
+			// accounts listed against one server:port. A shared endpoint is
+			// tempting to probe once - the round that produced this code saw
+			// ninety-one names resolve to thirty-five machines - but "the
+			// first account on this endpoint did not answer" is not "the
+			// endpoint is dead". The failure that matters here is frequently
+			// the account's own: a wrong UUID, a retired password, a protocol
+			// the server stopped serving. Those leave the endpoint perfectly
+			// alive for the accounts beside it, so short-circuiting the rest
+			// of the endpoint on one node's verdict silently converts one bad
+			// account into a whole machine's worth of dropped nodes.
+			//
 			// A dial that never answers must not hold a semaphore slot
 			// forever: sixteen of them is all it takes to deadlock the whole
 			// round, because no other node can start. URLTest is therefore
@@ -216,6 +313,37 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 			res := make(chan probeResult, 1)
 			go func() {
 				delay, err := probeOne(ctx, n, opt, expected)
+				if needsResample(err, delay, maxDelay) && ctx.Err() == nil {
+					atomic.AddInt64(&resampled, 1)
+					// A short pause before asking again: two dials in the
+					// same instant meet the same state.
+					select {
+					case <-time.After(probeRetryBackoff):
+					case <-ctx.Done():
+					}
+					if ctx.Err() == nil {
+						// The retry waits only as long as a delay can still
+						// be a pass, so a hopeless retry costs a fraction of
+						// a probe slot instead of a whole probe.
+						retryCtx, cancelRetry := context.WithTimeout(ctx, probeRetryDeadline(opt, maxDelay))
+						retryDelay, retryErr := probeOne(retryCtx, n, opt, expected)
+						// The deadline is released here rather than left to
+						// the goroutine's exit: the slot it holds is the
+						// round's scarcest resource.
+						cancelRetry()
+						// The first error is kept if the retry fails too:
+						// the report already says why the node lost.
+						if retryErr == nil && (err != nil || retryDelay < delay) {
+							// A retry that answers inside the short deadline
+							// still has to clear the delay limit, which
+							// applyProbe does below.
+							if maxDelay <= 0 || int64(retryDelay) <= maxDelay {
+								atomic.AddInt64(&saved, 1)
+							}
+							delay, err = retryDelay, nil
+						}
+					}
+				}
 				res <- probeResult{delay: delay, err: err}
 			}()
 
@@ -234,6 +362,10 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 	}
 
 	wg.Wait()
+
+	if n := atomic.LoadInt64(&resampled); n > 0 {
+		log.Infoln("probe round: %d node(s) re-sampled after an unusable first answer, %d cleared the limit", n, atomic.LoadInt64(&saved))
+	}
 
 	return ctx.Err()
 }

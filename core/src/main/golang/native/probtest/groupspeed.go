@@ -17,10 +17,10 @@ import (
 // has to be read from YAML, and the delay the UI shows travels with it,
 // together with the URL that delay was measured against.
 type GroupNode struct {
-	Name  string
-	Delay int
-	Owner string
-	Path  []string
+	Name    string
+	Delay   int
+	Owner   string
+	Path    []string
 	TestURL string
 	Proxy   C.Proxy
 }
@@ -44,8 +44,8 @@ type GroupProgress struct {
 // reason it cannot be ranked. Delay is the latency this run measured, so the
 // number a reader sees is the number this run judged by.
 type GroupOutcome struct {
-	Name  string  `json:"name"`
-	Delay int     `json:"delay"`
+	Name  string `json:"name"`
+	Delay int    `json:"delay"`
 	// Owner names the group a selection may be written to for this node, so the
 	// caller patches the group that actually holds the node rather than the one
 	// it asked about, which may only route to it.
@@ -53,14 +53,14 @@ type GroupOutcome struct {
 	// Path names the groups on the way down to the direct parent of this
 	// node, so the caller can move every one of them and reach a node behind
 	// a sub group instead of patching a group that merely routes to it.
-	Path []string `json:"path,omitempty"`
-	Mbps  float64 `json:"mbps,omitempty"`
-	Tier  string  `json:"tier,omitempty"`
-	Error string  `json:"error,omitempty"`
+	Path  []string `json:"path,omitempty"`
+	Mbps  float64  `json:"mbps,omitempty"`
+	Tier  string   `json:"tier,omitempty"`
+	Error string   `json:"error,omitempty"`
 }
 
 // groupMaxDelayMs is the latency limit one live-group round enforces. Zero
-// defers to defaultMaxDelayMs, the same 500ms the candidate rounds use, so
+// defers to defaultMaxDelayMs, the same 1000ms the candidate rounds use, so
 // the two screening paths cannot disagree about what a usable node is.
 func groupMaxDelayMs(maxDelayMs int64) int64 {
 	if maxDelayMs <= 0 {
@@ -170,11 +170,11 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 
 			go func() {
 				var (
-					worst float64
-					measured uint16
+					worst     float64
+					measured  uint16
 					bestDelay uint16
-					stage string
-					err   error
+					stage     string
+					err       error
 				)
 
 				for r := 0; r < rounds; r++ {
@@ -190,7 +190,7 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					// thing is also quick. The probe's own client allows 30
 					// seconds, which a node that never answers spends in
 					// full - while the limit this very result is judged
-					// against is [groupMaxDelayMs], 500ms by default. A node
+					// against is [groupMaxDelayMs], 1000ms by default. A node
 					// that answers in 600ms and one that never answers are
 					// dropped alike, so all but 600ms of that 30 second window
 					// is spent learning something the limit has already
@@ -224,7 +224,7 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					// that answers in 400ms must not be dropped because one round
 					// spiked, which is what a tight limit keeps refusing on a
 					// subscription whose nodes sit just under the limit.
-					if derr == nil && r + 1 == rounds && int64(bestDelay) > maxDelay {
+					if derr == nil && r+1 == rounds && int64(bestDelay) > maxDelay {
 						derr = fmt.Errorf("delay %dms above %dms limit", bestDelay, maxDelay)
 					}
 					if derr != nil {
@@ -233,10 +233,13 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					}
 					measured = bestDelay
 
-					mbps, s, e := speedCheck(ctx, n.Proxy, sp)
+					mbps, s, _, e := speedCheck(ctx, n.Proxy, sp)
 
 					// The worst round is the score, and any round's failure
-					// fails the node: one broken round is a broken node.
+					// fails the node: one broken round is a broken node. A
+					// video run's failed probe arrives here as an error too
+					// (SpeedOptions.RequireReachability), so a node that
+					// cannot open YouTube never ranks for that group.
 					if r == 0 || mbps < worst {
 						worst = mbps
 					}
@@ -269,7 +272,12 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					atomic.AddInt64(&failed, 1)
 				} else {
 					out.Mbps = r.mbps
-					out.Tier = SpeedTier(r.mbps)
+					// The tier describes video the probes proved reachable. A
+					// run without them - every non-video group, and the watch -
+					// measured a generic transfer, so it carries no video tier.
+					if !sp.SkipReachability {
+						out.Tier = SpeedTier(r.mbps)
+					}
 					atomic.AddInt64(&passed, 1)
 				}
 			case <-ctx.Done():
@@ -295,6 +303,10 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 // Gate failure classes, naming the probe a node died at.
 const (
 	gateStageLatency = "latency"
+	// gateStageYouTube covers the reachability probes when the run is the
+	// video group's: there a failed probe is the reason the node cannot serve
+	// the traffic the group exists for, not a footnote to a throughput score.
+	gateStageYouTube = "youtube"
 )
 
 // latencyProbeTimeout caps the cheap stage of a live-group round. Six times

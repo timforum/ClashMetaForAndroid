@@ -38,6 +38,15 @@ func fetchAndValid(callback unsafe.Pointer, path, url C.c_string, force C.int) {
 	}(C.GoString(path), C.GoString(url), callback)
 }
 
+//export coreLoaded
+func coreLoaded() C.int {
+	if config.Loaded() {
+		return 1
+	}
+
+	return 0
+}
+
 //export load
 func load(completable unsafe.Pointer, path C.c_string) {
 	go func(path string) {

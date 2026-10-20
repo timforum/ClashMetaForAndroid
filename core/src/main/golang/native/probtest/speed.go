@@ -92,6 +92,14 @@ type SpeedOptions struct {
 	// answer the question the watch asks, whether the node still
 	// answers and still carries.
 	SkipReachability bool `json:"skipReachability,omitempty"`
+	// RequireReachability turns a failed probe from a note into the verdict,
+	// and skips the throughput stage behind it. The screening gate keeps it
+	// off: there, a site that is shut for every exit that hour must not empty
+	// the published pool. The video group's own run turns it on, because a
+	// node that cannot open YouTube cannot serve the traffic that group
+	// exists for, and downloading a megabyte through it would only prove a
+	// number nobody can use.
+	RequireReachability bool `json:"requireReachability,omitempty"`
 
 	MaxTime time.Duration `json:"-"`
 }
@@ -207,7 +215,7 @@ const (
 	// The old gtv-videos-bucket URL answers 403 to anonymous range requests
 	// since Google locked it down, which zeros every node that reaches this
 	// stage. Cloudflare's speed endpoint honours the 1 MiB transfer window.
-	defaultThroughputURL = "https://speed.cloudflare.com/__down?bytes=1048576"
+	defaultThroughputURL  = "https://speed.cloudflare.com/__down?bytes=1048576"
 	defaultProbeReadLimit = 64 << 10
 
 	// Speed gate budgets. The reachability probes read only a prefix of each
@@ -285,9 +293,16 @@ func speedGate(ctx context.Context, survivors []*node, opt Options, onProgress f
 	failCount := map[string]*int64{}
 	failFirst := map[string]string{}
 
+	// Nodes published despite a reachability probe failing, and the reason one
+	// of them gave. A round that keeps everything must not quietly hide that
+	// a third of what it published cannot see the site.
+	var unreachable int
+	unreachableFirst := ""
+
 	type speedResult struct {
 		mbps  float64
 		stage string
+		note  string
 		err   error
 	}
 
@@ -309,8 +324,8 @@ func speedGate(ctx context.Context, survivors []*node, opt Options, onProgress f
 			// probes that hang before any byte can be judged.
 			res := make(chan speedResult, 1)
 			go func() {
-				mbps, stage, err := speedCheck(ctx, n.proxy, sp)
-				res <- speedResult{mbps: mbps, stage: stage, err: err}
+				mbps, stage, note, err := speedCheck(ctx, n.proxy, sp)
+				res <- speedResult{mbps: mbps, stage: stage, note: note, err: err}
 			}()
 
 			timer := time.NewTimer(probeTimeoutPerNode + 30*time.Second)
@@ -350,6 +365,16 @@ func speedGate(ctx context.Context, survivors []*node, opt Options, onProgress f
 				n.speedMbps = r.mbps
 				n.speedTier = SpeedTier(r.mbps)
 				mu.Lock()
+				if r.note != "" {
+					// The node is published, and the reason a site was
+					// closed to it travels with it into the report rather
+					// than into a discard.
+					n.note = r.note
+					unreachable++
+					if unreachableFirst == "" {
+						unreachableFirst = r.note
+					}
+				}
 				kept = append(kept, n)
 				mu.Unlock()
 			case <-ctx.Done():
@@ -375,9 +400,12 @@ func speedGate(ctx context.Context, survivors []*node, opt Options, onProgress f
 		failSummary[name] = *counter
 	}
 	log.Infoln(
-		"speed gate finished: tested=%d kept=%d dropped=%d dial=%d failures=%v first=%v",
-		total, len(kept), dropped, atomic.LoadInt64(&dialFail), failSummary, failFirst,
+		"speed gate finished: tested=%d kept=%d dropped=%d dial=%d unreachable-but-kept=%d failures=%v first=%v",
+		total, len(kept), dropped, atomic.LoadInt64(&dialFail), unreachable, failSummary, failFirst,
 	)
+	if unreachable > 0 {
+		log.Infoln("speed gate: %d kept node(s) could not reach the site (%s)", unreachable, unreachableFirst)
+	}
 	mu.Unlock()
 
 	return kept
@@ -402,24 +430,43 @@ func isDialError(err error) bool {
 		strings.Contains(s, "i/o timeout") || strings.Contains(s, "no such host")
 }
 
-// speedCheck runs the gate against one node: three reachability probes
-// into YouTube, then one throughput measurement. The first failure stops the
-// rest, so a node that cannot reach the site at all never downloads video.
+// speedCheck runs the gate against one node: the reachability probes, then one
+// throughput measurement.
 //
-// With SkipReachability set the probes are skipped and only the throughput
-// is measured, which is what the periodic watch of the node in use asks.
+// A reachability failure is a note, not a verdict. Those probes answer one
+// question - is this site open from this exit - and a round watched the gate
+// drop forty-nine nodes out of fifty because every exit had lost YouTube in
+// the same hour, then a later round drop sixty-two of sixty-four. That is a
+// fact about where the exits are and when the round ran; it says nothing about
+// whether the nodes carry traffic, and discarding them on that evidence
+// throws away exactly the nodes a reader would otherwise have. So the failure
+// is recorded and the node still has to prove itself by throughput, which is
+// the measurement that actually describes it.
 //
-// The returned stage names which probe decided, for the gate's summary.
-func speedCheck(ctx context.Context, proxy C.Proxy, sp SpeedOptions) (float64, string, error) {
+// With SkipReachability set the probes are skipped entirely, which is what the
+// periodic watch of the node in use asks.
+//
+// The returned stage names which probe decided, for the gate's summary, and
+// the note names the one that merely could not be reached.
+func speedCheck(ctx context.Context, proxy C.Proxy, sp SpeedOptions) (float64, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeoutPerNode)
 	defer cancel()
 
+	note := ""
 	if !sp.SkipReachability {
 		if stage, err := youtubeReachable(ctx, proxy, sp); err != nil {
-			return 0, stage, err
+			note = fmt.Sprintf("%s unreachable", stage)
+			if sp.RequireReachability {
+				return 0, gateStageYouTube, note, fmt.Errorf("%s", note)
+			}
 		}
 	}
-	return youtubeThroughput(ctx, proxy, sp)
+
+	mbps, stage, err := youtubeThroughput(ctx, proxy, sp)
+	if err != nil {
+		return 0, stage, note, err
+	}
+	return mbps, "", note, nil
 }
 
 // youtubeReachable walks the configured reachability probes in order. The

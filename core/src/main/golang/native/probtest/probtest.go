@@ -51,7 +51,7 @@ const (
 	// defaultMaxDelayMs answers the question of whether a reachable node is
 	// fast enough to connect through: an exit that takes half a second per
 	// request is technically alive but drags everything behind it.
-	defaultMaxDelayMs = 500
+	defaultMaxDelayMs = 1000
 )
 
 // Node is the outcome of one candidate node.
@@ -66,6 +66,12 @@ type Node struct {
 	// that far.
 	SpeedMbps float64 `json:"speedMbps,omitempty"`
 	SpeedTier string  `json:"speedTier,omitempty"`
+	// Note carries something worth saying about a node that was published
+	// anyway - today, that the reachability probe could not open the site
+	// from its exit. A node with a note is not worse than one without, but it
+	// is not the same either, and a report that cannot tell them apart would
+	// be the same silence as no report.
+	Note string `json:"note,omitempty"`
 	// Rejected marks nodes that were never probed because they failed
 	// pre-validation (a node that cannot be parsed safely).
 	Rejected bool `json:"rejected,omitempty"`
@@ -223,6 +229,7 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 			continue
 		}
 		seen[n.name] = struct{}{}
+
 		nodes = append(nodes, n)
 		report.Nodes = append(report.Nodes, Node{Name: n.name, Type: n.typ})
 	}
@@ -283,6 +290,7 @@ func Run(ctx context.Context, rawYaml []byte, opt Options, onProgress func(Progr
 			report.Nodes[i].Delays = n.delays
 			report.Nodes[i].SpeedMbps = n.speedMbps
 			report.Nodes[i].SpeedTier = n.speedTier
+			report.Nodes[i].Note = n.note
 			if n.lastErr != "" {
 				report.Nodes[i].Error = n.lastErr
 			}

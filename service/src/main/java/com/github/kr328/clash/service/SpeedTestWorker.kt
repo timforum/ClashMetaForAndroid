@@ -23,6 +23,7 @@ import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.model.SpeedTestWatchState
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.SpeedTestProfile
 import com.github.kr328.clash.service.util.logSpeedTestStages
 import com.github.kr328.clash.service.util.sendSpeedTestResultsChanged
 import kotlinx.coroutines.Job
@@ -705,7 +706,7 @@ class SpeedTestWorker : BaseService() {
         // whole app connects through when nobody is watching. The worst round
         // is the score, so the ranking needs both rounds to hold up.
         val startedAt = System.currentTimeMillis()
-        val envelope = Clash.speedTestGroup(group, SpeedTestOptions(rounds = 2))
+        val envelope = Clash.speedTestGroup(group, SpeedTestProfile.options(group, rounds = 2))
 
         if (envelope.ok) {
             logSpeedTestStages(

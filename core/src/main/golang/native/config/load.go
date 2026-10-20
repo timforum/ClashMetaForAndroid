@@ -5,6 +5,7 @@ import (
 	P "path"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"cfa/native/app"
 
@@ -13,6 +14,17 @@ import (
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/log"
 )
+
+// loaded is true while a real profile, not the empty default, is in the core.
+// The subscription fetch reads it to decide whether the tunnel has a proxy to
+// lend: fetching through the core is the only way the app can reach a
+// subscription URL that is blocked on the raw network.
+var loaded atomic.Bool
+
+// Loaded reports whether a profile is loaded in this process.
+func Loaded() bool {
+	return loaded.Load()
+}
 
 func logDns(cfg *config.RawConfig) {
 	bytes, err := yaml.Marshal(&cfg.DNS)
@@ -80,6 +92,8 @@ func Load(path string) error {
 
 	app.ApplySubtitlePattern(rawCfg.ClashForAndroid.UiSubtitlePattern)
 
+	loaded.Store(true)
+
 	runtime.GC()
 
 	return nil
@@ -90,6 +104,8 @@ func LoadDefault() {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	loaded.Store(false)
 
 	hub.ApplyConfig(cfg)
 }

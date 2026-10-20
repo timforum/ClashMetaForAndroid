@@ -20,9 +20,12 @@ data class ProbTestOptions(
     /**
      * A node that answers but slower than this ceiling (milliseconds) is
      * dropped from the screening just like a dead one: reachable-but-slow is
-     * not worth connecting through. Zero lets the core apply its default.
+     * not worth connecting through. Zero lets the core apply its default. The
+* default is 1000ms because a round that ran here answered 16 candidates at
+* 500-800ms and 61 at 800-1250ms: a half-second ceiling dropped a wall of
+* nodes that were alive and merely not fast.
      */
-    @SerialName("maxDelayMs") val maxDelayMs: Long = 500,
+    @SerialName("maxDelayMs") val maxDelayMs: Long = 1000,
     /**
      * The subconverter style template that decides which groups the surviving
      * nodes fill and where each rule set sends its traffic. Empty keeps the

@@ -78,6 +78,17 @@ class StatusProvider : ContentProvider() {
 
                 shouldStartClashOnBoot = value
             }
+
+        /**
+         * Whether this process is the one holding the active VPN.
+         *
+         * Distinct from [serviceRunning], which is also true when the core runs
+         * in system proxy mode with no tunnel at all. The screening reads this
+         * to tell whether its own dials are its to protect from a tunnel it
+         * owns or whether a tunnel it does not own is about to swallow them.
+         */
+        @Volatile
+        var vpnRunning: Boolean = false
         var shouldStartClashOnBoot: Boolean
             get() = Global.application.filesDir.resolve(CLASH_SERVICE_RUNNING_FILE).exists()
             set(value) {

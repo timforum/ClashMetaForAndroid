@@ -16,6 +16,7 @@ import com.github.kr328.clash.service.SpeedTestReceiver
 import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.SpeedTestProfile
 import com.github.kr328.clash.service.util.logSpeedTestStages
 import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.isActive
@@ -203,9 +204,12 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
         design: ProxyDesign,
     ) {
         try {
+            // The video group proves YouTube playback; every other group only
+            // needs latency plus a generic transfer, so the YouTube probes are
+            // left out of its run rather than spending traffic on them.
             val options = SpeedTestJson.encodeToString(
                 SpeedTestOptions.serializer(),
-                SpeedTestOptions()
+                SpeedTestProfile.options(group)
             )
 
             val startedAt = System.currentTimeMillis()

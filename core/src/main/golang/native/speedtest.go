@@ -56,17 +56,23 @@ type groupSpeedRequest struct {
 	// SkipReachability drops the YouTube probes from the measurement,
 	// leaving latency plus throughput.
 	SkipReachability bool `json:"skipReachability,omitempty"`
+	// RequireReachability makes a failed YouTube probe the verdict instead of
+	// a note, which is what the video group's run asks: a node that cannot
+	// open YouTube cannot carry the group's traffic, and measuring its
+	// throughput anyway would only spend traffic on a node that never ranks.
+	RequireReachability bool `json:"requireReachability,omitempty"`
 }
 
 func (r groupSpeedRequest) options() probtest.SpeedOptions {
 	return probtest.SpeedOptions{
-		Enabled:          true,
-		FloorMbps:        r.FloorMbps,
-		MaxBytes:         r.MaxBytes,
-		MaxTimeMs:        r.MaxTimeMs,
-		Concurrency:      r.Concurrency,
-		ThroughputURL:    r.ThroughputURL,
-		SkipReachability: r.SkipReachability,
+		Enabled:             true,
+		FloorMbps:           r.FloorMbps,
+		MaxBytes:            r.MaxBytes,
+		MaxTimeMs:           r.MaxTimeMs,
+		Concurrency:         r.Concurrency,
+		ThroughputURL:       r.ThroughputURL,
+		SkipReachability:    r.SkipReachability,
+		RequireReachability: r.RequireReachability,
 	}
 }
 
@@ -220,9 +226,9 @@ func dropInformationNodes(targets []tunnel.SpeedTarget) []tunnel.SpeedTarget {
 // core's own running totals so a reader can tell "nothing flowed anywhere"
 // from "traffic flowed but not through this node".
 type monitorEnvelope struct {
-	OK        bool                 `json:"ok"`
-	Error     string               `json:"error,omitempty"`
-	Group     string               `json:"group,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	Group string `json:"group,omitempty"`
 	// InUse is the leaf the connection is on behind Group, reached by following
 	// the selection down: for a group of groups the name the group itself reports
 	// is a sub group, which is not a node the gate could measure.

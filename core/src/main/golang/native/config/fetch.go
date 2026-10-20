@@ -16,8 +16,11 @@ import (
 
 	"cfa/native/app"
 
+	mhttp "github.com/metacubex/http"
 	"github.com/metacubex/mihomo/adapter/provider"
+	"github.com/metacubex/mihomo/component/dialer"
 	clashHttp "github.com/metacubex/mihomo/component/http"
+	"github.com/metacubex/mihomo/log"
 	RB "github.com/metacubex/mihomo/rules/bundle"
 )
 
@@ -38,16 +41,38 @@ type fetchHeader struct {
 	ProfileUpdateInterval string
 }
 
-func openUrl(ctx context.Context, url string) (io.ReadCloser, fetchHeader, error) {
-	response, err := clashHttp.HttpRequest(ctx, url, http.MethodGet, http.Header{"User-Agent": {"ClashMetaForAndroid/" + app.VersionName()}}, nil)
+// directDialer dials past the core's tunnel. Requests made by the app take the
+// tunnel first, so a subscription the raw network blocks can still be fetched
+// through the exit the user runs; this dialer is the retry for the other
+// direction - a tunnel whose exit is broken while the URL itself is reachable.
+var directDialer = dialer.NewDialer()
 
-	if err != nil {
-		return nil, fetchHeader{}, err
+func openUrl(ctx context.Context, url string) (io.ReadCloser, fetchHeader, error) {
+	header := http.Header{"User-Agent": {"ClashMetaForAndroid/" + app.VersionName()}}
+
+	response, err := clashHttp.HttpRequest(ctx, url, http.MethodGet, header, nil)
+	if err == nil {
+		return fetchBody(response.Header, response.Body)
 	}
 
-	return response.Body, fetchHeader{
-		SubscriptionUserInfo:  response.Header.Get("subscription-userinfo"),
-		ProfileUpdateInterval: response.Header.Get("profile-update-interval"),
+	tunnelErr := err
+
+	response, err = clashHttp.HttpRequest(ctx, url, http.MethodGet, header, nil, clashHttp.WithDialer(directDialer))
+	if err != nil {
+		log.Warnln("Fetch %s: through the tunnel: %s; direct: %s", url, tunnelErr.Error(), err.Error())
+
+		return nil, fetchHeader{}, fmt.Errorf("through the tunnel: %s; direct: %s", tunnelErr, err)
+	}
+
+	log.Warnln("Fetch %s: the tunnel failed (%s), the direct connection answered", url, tunnelErr.Error())
+
+	return fetchBody(response.Header, response.Body)
+}
+
+func fetchBody(header mhttp.Header, body io.ReadCloser) (io.ReadCloser, fetchHeader, error) {
+	return body, fetchHeader{
+		SubscriptionUserInfo:  header.Get("subscription-userinfo"),
+		ProfileUpdateInterval: header.Get("profile-update-interval"),
 	}, nil
 }
 

@@ -224,6 +224,13 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeLoad(JNIEnv *env, jobject t
     load(_completable, _path);
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeCoreLoaded(JNIEnv *env, jobject thiz) {
+    TRACE_METHOD();
+
+    return coreLoaded() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeFetchAndValid(JNIEnv *env, jobject thiz,
                                                                     jobject callback,

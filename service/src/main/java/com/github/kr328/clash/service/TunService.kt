@@ -87,6 +87,7 @@ class TunService : VpnService(), CoroutineScope by CoroutineScope(Dispatchers.De
             return stopSelf()
 
         StatusProvider.serviceRunning = true
+        StatusProvider.vpnRunning = true
 
         StaticNotificationModule.createNotificationChannel(this)
         StaticNotificationModule.notifyLoadingNotification(this)
@@ -104,6 +105,7 @@ class TunService : VpnService(), CoroutineScope by CoroutineScope(Dispatchers.De
         TunModule.requestStop()
 
         StatusProvider.serviceRunning = false
+        StatusProvider.vpnRunning = false
 
         sendClashStopped(reason)
 

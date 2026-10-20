@@ -48,7 +48,7 @@ object ProfileProcessor {
                 Clash.setAgeSecretKey(snapshot.ageSecretKey?.takeIf { it.isNotBlank() })
 
                 val force = snapshot.type != Profile.Type.File
-                val subscriptionInfo = fetchProfile(context, snapshot.source, force, callback)
+                val subscriptionInfo = fetchProfile(context, snapshot.source, force, snapshot.ageSecretKey, callback)
 
                 profileLock.withLock {
                     if (PendingDao().queryByUUID(snapshot.uuid) == snapshot) {
@@ -107,7 +107,7 @@ object ProfileProcessor {
 
                 Clash.setAgeSecretKey(snapshot.ageSecretKey?.takeIf { it.isNotBlank() })
 
-                val subscriptionInfo = fetchProfile(context, snapshot.source, true, callback)
+                val subscriptionInfo = fetchProfile(context, snapshot.source, true, snapshot.ageSecretKey, callback)
 
                 profileLock.withLock {
                     val imported = ImportedDao().queryByUUID(snapshot.uuid)
@@ -134,14 +134,50 @@ object ProfileProcessor {
         }
     }
 
+    /**
+     * A subscription can be reachable only through a proxy, and the fetch only
+     * has one while a profile is loaded in the core: the service resets the
+     * core to the empty default when the VPN stops, and an empty tunnel has
+     * nothing to dial through. Loading the active profile for the fetch puts
+     * the request on the exit the user already browses with, instead of
+     * failing on a raw connection the network blocks.
+     *
+     * The load is skipped while the VPN runs: the tunnel is already live and
+     * reloading it would tear the connections the user is using.
+     */
+    private suspend fun ensureProxyReady(context: Context, secretKey: String?) {
+        if (Clash.coreLoaded()) {
+            return
+        }
+
+        val active = ServiceStore(context).activeProfile ?: return
+        val imported = ImportedDao().queryByUUID(active) ?: return
+
+        // The active profile may be age-encrypted, and loading it needs its own
+        // key rather than the one the caller just installed for the profile
+        // being fetched, which is put back below in every case.
+        Clash.setAgeSecretKey(imported.ageSecretKey?.takeIf { it.isNotBlank() })
+
+        try {
+            Clash.load(context.importedDir.resolve(imported.uuid.toString())).await()
+        } catch (e: Exception) {
+            Log.w("Load active profile before fetching: ${e.message}", e)
+        } finally {
+            Clash.setAgeSecretKey(secretKey?.takeIf { it.isNotBlank() })
+        }
+    }
+
     private suspend fun fetchProfile(
         context: Context,
         source: String,
         force: Boolean,
+        ageSecretKey: String?,
         callback: IFetchObserver?,
     ): FetchStatus? {
         var subscriptionInfo: FetchStatus? = null
         var cb = callback
+
+        ensureProxyReady(context, ageSecretKey)
 
         Clash.fetchAndValid(context.processingDir, source, force) {
             if (it.action == FetchStatus.Action.SubscriptionInfo) {

@@ -174,6 +174,17 @@ object Clash {
         }
     }
 
+    /**
+     * Whether a profile (not the empty default) is loaded in this process.
+     *
+     * The fetch of a subscription goes through the tunnel when one is loaded,
+     * and straight out to the network when it is not: a service that has never
+     * loaded a profile has no proxy to lend.
+     */
+    fun coreLoaded(): Boolean {
+        return Bridge.nativeCoreLoaded()
+    }
+
     fun load(path: File): CompletableDeferred<Unit> {
         return CompletableDeferred<Unit>().apply {
             Bridge.nativeLoad(this, path.absolutePath)

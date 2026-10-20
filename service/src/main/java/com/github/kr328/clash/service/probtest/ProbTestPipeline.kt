@@ -1,12 +1,17 @@
 ﻿package com.github.kr328.clash.service.probtest
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.util.Base64
+import androidx.core.content.getSystemService
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.ProbTestOptions
 import com.github.kr328.clash.core.model.ProbTestReport
 import com.github.kr328.clash.core.model.ProbTestSpeedTest
+import com.github.kr328.clash.service.StatusProvider
 import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.store.ServiceStore
@@ -120,13 +125,17 @@ private fun failureKind(error: String?): String {
     // The gate names the probe it stopped at, so a node that answered the
     // latency rounds and then failed on YouTube reads differently from one that
     // never answered at all - kept for last so a specific wording above wins.
+    //
+    // A stage can be two words: "parse vless: ..." names the protocol the core
+    // could not read, and the type was put there precisely so the count stops
+    // being an anonymous "parse". A test that admits only a single word folded
+    // every one of those into "other", which is the silence the type was added
+    // to remove, so the pair is kept whole as one token.
     val stage = message.substringBefore(':').trim()
-    val stageName = if (stage.isNotEmpty() && stage.length <= 16 &&
-        stage.none { it.isWhitespace() }
-    ) {
-        stage
-    } else {
-        "other"
+    val stageName = when {
+        stage.startsWith("parse ") && stage.length <= 24 -> stage.replace(' ', '-')
+        stage.isNotEmpty() && stage.length <= 16 && stage.none { it.isWhitespace() } -> stage
+        else -> "other"
     }
 
     return when {
@@ -189,8 +198,8 @@ private val OVER_LIMIT_DELAY = Regex("""delay (\d+)ms above (\d+)ms limit""")
  * A band of delays above the limit, expressed as multiples of the limit so the
  * bands mean the same thing whichever limit happens to be in force.
  *
- * The first band ends at 1.6, which is where a 500ms limit's obvious
- * alternative - 800ms - lands, so it is the band that settles the question of
+ * The first band ends at 1.6, which is where a 1000ms limit's obvious
+ * alternative - 1600ms - lands, so it is the band that settles the question of
  * whether raising the line would admit a cluster or a tail.
  */
 private val DELAY_BANDS = listOf(
@@ -256,6 +265,64 @@ class ProbTestPipeline(private val context: Context) {
         } catch (e: Exception) {
             Log.w("probtest: cannot read speed config", e)
             ""
+        }
+    }
+
+    /**
+     * Runs [block] with the process pinned to the network under the active VPN,
+     * when another app owns that VPN.
+     *
+     * The screening dials every candidate itself, so what it measures has to be
+     * the raw network: a round run through someone else's tunnel measures that
+     * tunnel, not the nodes, and publishing the survivors would promise the
+     * reader something the measurement never showed. When this app owns the
+     * tunnel its sockets are already protected per socket, and rebinding the
+     * process on top of that would only disturb the core, so that case is left
+     * alone. When another app owns it the only way out is to bind the process
+     * to the network the VPN sits on; a VPN built without `allowBypass` refuses
+     * that, and then the round can do nothing but say so in the log, because
+     * quietly reporting tunnel numbers as the nodes' own would be a lie.
+     *
+     * Only the screening is wrapped, never the round: the candidate
+     * subscriptions are fetched over the normal path on purpose, because a
+     * source that is blocked in the device's own country still has to be
+     * reachable through the tunnel the user has up.
+     */
+    private suspend fun <T> offForeignVpn(block: suspend () -> T): T {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return block()
+
+        val connectivity = context.getSystemService<ConnectivityManager>() ?: return block()
+
+        val active = connectivity.activeNetwork
+        val capabilities = active?.let(connectivity::getNetworkCapabilities)
+        if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true) return block()
+
+        // Our own tunnel: per-socket protection is already in place and binding
+        // the process would change routing for the core running beside us.
+        if (StatusProvider.vpnRunning) return block()
+
+        val underlying = connectivity.allNetworks.firstOrNull { candidate ->
+            val c = connectivity.getNetworkCapabilities(candidate) ?: return@firstOrNull false
+
+            !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+
+        if (underlying == null || !connectivity.bindProcessToNetwork(underlying)) {
+            Log.w(
+                "probtest: another app's VPN is active and will not let this process bypass it;" +
+                    " this round measures through that tunnel"
+            )
+
+            return block()
+        }
+
+        Log.i("probtest: another app's VPN is active; screening on the underlying network")
+
+        return try {
+            block()
+        } finally {
+            connectivity.bindProcessToNetwork(null)
         }
     }
 
@@ -404,40 +471,45 @@ class ProbTestPipeline(private val context: Context) {
                 " against ${options.testUrl.ifEmpty { "the core default" }}"
         )
 
-        val envelope = Clash.probTest(documents, options) { progress ->
-            // One shape for every stage would have been shorter, but the gate
-            // borrows the latency rounds' numbers on the way through, so
-            // "round 3/3 passed=0 failed=1" lands after the last round has
-            // already been reported and reads as a fourth pass over screening
-            // survivors that were still being measured. Name the stage.
-            if (progress.stage == "speedtest") {
-                Log.d(
-                    "probtest speed gate ${progress.done}/${progress.total}" +
-                        " passed=${progress.passed} failed=${progress.failed}"
-                )
-            } else {
-                Log.d(
-                    "probtest round ${progress.round}/${progress.rounds}" +
-                        " passed=${progress.passed} failed=${progress.failed}"
+        // The screening itself runs off any VPN another app owns (see
+        // [offForeignVpn]): the downloads above stay on the normal path, the
+        // node measurements below must not.
+        val envelope = offForeignVpn {
+            Clash.probTest(documents, options) { progress ->
+                // One shape for every stage would have been shorter, but the gate
+                // borrows the latency rounds' numbers on the way through, so
+                // "round 3/3 passed=0 failed=1" lands after the last round has
+                // already been reported and reads as a fourth pass over screening
+                // survivors that were still being measured. Name the stage.
+                if (progress.stage == "speedtest") {
+                    Log.d(
+                        "probtest speed gate ${progress.done}/${progress.total}" +
+                            " passed=${progress.passed} failed=${progress.failed}"
+                    )
+                } else {
+                    Log.d(
+                        "probtest round ${progress.round}/${progress.rounds}" +
+                            " passed=${progress.passed} failed=${progress.failed}"
+                    )
+                }
+
+                onProgress(
+                    ProbTestProgress(
+                        stage = when (progress.stage) {
+                            // The core reports the throughput gate by name; the
+                            // latency rounds arrive with no stage at all.
+                            "speedtest" -> Stage.SPEED_TEST
+                            else -> Stage.SCREENING
+                        },
+                        round = progress.round,
+                        rounds = progress.rounds,
+                        passed = progress.passed,
+                        failed = progress.failed,
+                        total = progress.total,
+                        done = progress.done,
+                    )
                 )
             }
-
-            onProgress(
-                ProbTestProgress(
-                    stage = when (progress.stage) {
-                        // The core reports the throughput gate by name; the
-                        // latency rounds arrive with no stage at all.
-                        "speedtest" -> Stage.SPEED_TEST
-                        else -> Stage.SCREENING
-                    },
-                    round = progress.round,
-                    rounds = progress.rounds,
-                    passed = progress.passed,
-                    failed = progress.failed,
-                    total = progress.total,
-                    done = progress.done,
-                )
-            )
         }
 
         val report = envelope.report

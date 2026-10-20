@@ -31,7 +31,7 @@ data class SpeedTestOptions(
      * shows is exactly the number a reader judges a node by. Zero defers to
      * the core's own default, the same limit the candidate rounds use.
      */
-    @SerialName("maxDelayMs") val maxDelayMs: Long = 500,
+    @SerialName("maxDelayMs") val maxDelayMs: Long = 1000,
     /**
      * Endpoint the latency probe measures against. Empty keeps each node's
      * own, the URL its displayed delay was measured against, so a fresh
@@ -53,6 +53,14 @@ data class SpeedTestOptions(
      * the node serves between checks.
      */
     @SerialName("skipReachability") val skipReachability: Boolean = false,
+    /**
+     * Turns a failed YouTube probe into the verdict instead of a note, and
+     * skips the throughput measurement behind it. The video group's run asks
+     * this: a node that cannot open YouTube cannot carry that group's traffic,
+     * so a download through it would only spend traffic on a node that never
+     * ranks. Every other group leaves it off and skips the probes instead.
+     */
+    @SerialName("requireReachability") val requireReachability: Boolean = false,
 )
 
 /** Emitted once per finished node while a run is in flight. */
