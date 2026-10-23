@@ -429,6 +429,16 @@ class ProbTestSettingsDesign(
                     dependencies.add(this)
                 },
             )
+
+            editableText(
+                value = srvStore::probtestRelayUrl,
+                adapter = NullableTextAdapter.Text,
+                title = R.string.probtest_relay_url,
+                icon = R.drawable.ic_baseline_sync,
+                placeholder = R.string.probtest_relay_url_summary,
+                card = true,
+                configure = dependencies::add,
+            )
         }
 
         screen.shrinkText()

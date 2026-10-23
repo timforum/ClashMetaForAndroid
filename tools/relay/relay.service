@@ -1,0 +1,14 @@
+[Unit]
+Description=screening upload relay
+After=network.target
+
+[Service]
+WorkingDirectory=/data/home/relay
+ExecStart=/usr/bin/python3 /data/home/relay/relay.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=RELAY_PORT=5001
+
+[Install]
+WantedBy=multi-user.target

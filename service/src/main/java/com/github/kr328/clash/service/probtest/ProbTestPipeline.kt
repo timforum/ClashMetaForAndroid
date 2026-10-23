@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
@@ -43,6 +44,46 @@ data class ProbTestCandidate(val name: String, val url: String)
  * as choices under the field without the list having to scroll.
  */
 private const val PROBE_URL_HISTORY = 3
+
+/**
+ * How many times the same document is offered before the round gives up on
+ * reaching the service from here.
+ *
+ * The first attempt keeps the route the reader chose. The four after it each
+ * move to the next best measured node, so a node that drops the write costs one
+ * attempt rather than the round: five exits is enough to tell a broken node
+ * from a broken destination, and still finishes inside a schedule's pause.
+ */
+private const val UPLOAD_ATTEMPTS = 5
+
+/**
+ * The ceiling for pushing a configuration out. Larger than the download one
+ * because it carries the whole document, and a timeout here loses the round's
+ * only result rather than one of its inputs. The body is compressed, so this is
+ * headroom over a transfer that is measured in tens of seconds, not a figure
+ * taken from one.
+ */
+private const val UPLOAD_TIMEOUT_MS = 300_000L
+
+/**
+ * One direct attempt's ceiling. Shorter than [UPLOAD_TIMEOUT_MS] because it is
+ * no longer the only attempt: a node that cannot move a compressed
+ * configuration in seconds is not one the next attempt should wait on.
+ */
+private const val UPLOAD_ATTEMPT_TIMEOUT_MS = 120_000L
+
+/**
+ * The relay's ceiling, back to the full length: it forwards the body itself and
+ * may spend several attempts upstream before it answers, so the phone is waiting
+ * on work it did not start.
+ */
+private const val UPLOAD_RELAY_TIMEOUT_MS = UPLOAD_TIMEOUT_MS
+
+/** Time for the tunnel to dial a node the route was just moved to. */
+private const val UPLOAD_SETTLE_MS = 1_000L
+
+/** Spaces the attempts that could not change the route at all. */
+private const val UPLOAD_RETRY_MS = 2_000L
 
 /**
  * The phase a round is in. Downloading and publishing are quick but not
@@ -100,6 +141,28 @@ data class ProbTestOutcome(
     val summary: String,
     val report: ProbTestReport? = null,
 )
+
+/**
+ * Where the configuration ended up, and how it got there.
+ *
+ * [relayed] is not another word for "took a retry": it means the round never
+ * reached the service from this device at all and handed the result to the
+ * sandbox instead. A reader looking at a published pool wants to know which of
+ * the two carried it, because only one of them exercised the path the phone
+ * itself uses.
+ */
+private data class UploadRouteResult(
+    val url: String,
+    val attempts: Int,
+    val relayed: Boolean,
+) {
+    val description: String
+        get() = when {
+            relayed -> "to $url through the relay after $attempts attempts"
+            attempts == 1 -> "to $url"
+            else -> "to $url on attempt $attempts of $UPLOAD_ATTEMPTS"
+        }
+}
 
 /**
  * Downloads the candidate subscriptions, asks the core to keep only the nodes
@@ -598,21 +661,62 @@ class ProbTestPipeline(private val context: Context) {
 
         onProgress(ProbTestProgress(stage = Stage.PUBLISHING, total = survived))
 
+        // A round that lost most of its sources still finishes: the documents
+        // that did arrive are probed, a handful survive, and publishing them
+        // replaces a working subscription with a near-empty one. That is what
+        // happened when a round downloaded 53 of 1274 candidates - the one node
+        // left was published and the pool was gone until the next good round.
+        // The count of the last publish is the only record of what "working"
+        // meant, so it is what a collapse is measured against.
+        val previousPublished = store.probtestPublishedNodes
+
+        // Most of the sources failing is the shape this guard exists for: the
+        // round still finishes, because the one source that answered is probed
+        // to the end, but what it measured is a fraction of the pool - and a
+        // handful of survivors from a fraction is not a screening result. This
+        // is the round that published a single node and emptied the
+        // subscription until the next good pass.
+        if (candidates.size >= MIN_SOURCES && documents.size * 2 < candidates.size) {
+            val message = "Kept the current subscription: only ${documents.size} of " +
+                "${candidates.size} candidate sources answered, so this round " +
+                "measured too little to replace the pool"
+
+            Log.w("probtest: refused to publish - $message")
+
+            return ProbTestOutcome(false, message, report)
+        }
+
+        if (previousPublished >= COLLAPSE_FLOOR &&
+            survived.toLong() * COLLAPSE_RATIO < previousPublished
+        ) {
+            val message = "Kept the previous $previousPublished nodes: only " +
+                "$survived of ${report?.total ?: 0} passed this round, which " +
+                "reads as a failed download rather than a screening result"
+
+            Log.w("probtest: refused to publish - $message")
+
+            return ProbTestOutcome(false, message, report)
+        }
+
         if (useService) {
             // The whole configuration is uploaded, not the bare node list. The
             // template has already decided which groups the survivors fill and
             // where every rule set sends its traffic, so handing over only the
             // proxies would discard that work and leave the service rebuilding
             // a layout of its own.
-            val destination = uploadTo(
-                url = uploadUrl,
+            val route = uploadWithFallback(
+                store = store,
+                primaryUrl = uploadUrl,
                 token = store.probtestUploadToken.trim(),
                 document = configuration,
+                report = report,
             )
+
+            store.probtestPublishedNodes = survived.toLong()
 
             return ProbTestOutcome(
                 published = true,
-                summary = "Uploaded $survived of ${report?.total ?: 0} nodes to $destination",
+                summary = "Uploaded $survived of ${report?.total ?: 0} nodes ${route.description}",
                 report = report,
             )
         }
@@ -625,6 +729,8 @@ class ProbTestPipeline(private val context: Context) {
         )
 
         publish(target, configuration, report, documents.size)
+
+        store.probtestPublishedNodes = survived.toLong()
 
         return ProbTestOutcome(
             published = true,
@@ -659,6 +765,148 @@ class ProbTestPipeline(private val context: Context) {
     }
 
     /**
+     * Offers the configuration until one route takes it.
+     *
+     * The first attempt uses the tunnel as it stands. Every later one first
+     * moves the profile's route onto the next best node this install has a
+     * measured figure for - the same move the speed test makes - because the
+     * exit is the one part of the path a round cannot otherwise change from
+     * here. When every attempt on the direct destination has failed, the body
+     * goes to the configured relay instead, which forwards it from the sandbox
+     * where the leg to the service is short.
+     *
+     * A round that lost its pool to a dropped connection at the last step is
+     * the case this exists for: the screening measured correctly, the publish
+     * never arrived, and the previous subscription stayed in place.
+     */
+    private suspend fun uploadWithFallback(
+        store: ServiceStore,
+        primaryUrl: String,
+        token: String,
+        document: String,
+        report: ProbTestReport?,
+    ): UploadRouteResult {
+        val compressed = gzip(document)
+        val plainBytes = document.toByteArray().size
+        val route = UploadRoute()
+
+        // Two rankings, merged. The group speed tests say how fast the nodes the
+        // profile is running today were, and this round says how fast the
+        // candidates that survived were. The pools overlap whenever a
+        // subscription keeps delivering the same nodes, and the newer figure
+        // wins for every name both know: it was measured minutes ago, through
+        // the same keys.
+        val measured = LinkedHashMap<String, Double>(store.speedTestResults().mbps)
+
+        report?.nodes.orEmpty()
+            .filter { it.speedMbps > 0.0 }
+            .forEach { measured[it.name] = maxOf(measured[it.name] ?: 0.0, it.speedMbps) }
+
+        // Every name here comes from a measured round, but a name survives in
+        // the results after the pool it came from is gone, so the ranking is
+        // limited to the nodes the running configuration still has.
+        val candidates = route.ranked(
+            measured = measured,
+            skip = route.inUse(),
+            limit = UPLOAD_ATTEMPTS - 1,
+        )
+
+        if (candidates.isNotEmpty()) {
+            Log.i(
+                "probtest: upload fallback order: " +
+                    candidates.joinToString { "'$it'" }
+            )
+        }
+
+        var lastError: Exception? = null
+
+        try {
+            for (attempt in 1..UPLOAD_ATTEMPTS) {
+                if (attempt > 1) {
+                    val node = candidates.getOrNull(attempt - 2)
+
+                    if (node != null && route.moveTo(node)) {
+                        Log.i(
+                            "probtest: upload attempt $attempt of " +
+                                "$UPLOAD_ATTEMPTS through '$node'"
+                        )
+
+                        // A selector takes effect on the next connection, and
+                        // the tunnel needs a moment to dial the new node before
+                        // a request through it can be expected to go anywhere.
+                        delay(UPLOAD_SETTLE_MS)
+                    } else {
+                        Log.w(
+                            "probtest: upload attempt $attempt of " +
+                                "$UPLOAD_ATTEMPTS stays on the current route"
+                        )
+
+                        delay(UPLOAD_RETRY_MS * (attempt - 1))
+                    }
+                }
+
+                try {
+                    uploadTo(
+                        url = primaryUrl,
+                        token = token,
+                        compressed = compressed,
+                        plainBytes = plainBytes,
+                        timeoutMs = UPLOAD_ATTEMPT_TIMEOUT_MS,
+                    )
+
+                    return UploadRouteResult(primaryUrl, attempt, relayed = false)
+                } catch (e: Exception) {
+                    lastError = e
+
+                    Log.w(
+                        "probtest: upload attempt $attempt of $UPLOAD_ATTEMPTS " +
+                            "to $primaryUrl failed",
+                        e
+                    )
+                }
+            }
+        } finally {
+            // The route was borrowed for these attempts only. Failing here too
+            // must not leave the reader on a node the round picked.
+            route.restore()
+        }
+
+        val relayUrl = secureUrl(store.probtestRelayUrl.trim())
+
+        if (relayUrl.isEmpty() || relayUrl == primaryUrl) {
+            throw IllegalStateException(
+                "Upload failed after $UPLOAD_ATTEMPTS attempts: " +
+                    (lastError?.message ?: "unknown error") +
+                    "; no relay is configured",
+                lastError,
+            )
+        }
+
+        Log.i("probtest: direct upload failed $UPLOAD_ATTEMPTS time(s); handing it to $relayUrl")
+
+        try {
+            uploadTo(
+                url = relayUrl,
+                token = token,
+                compressed = compressed,
+                plainBytes = plainBytes,
+                timeoutMs = UPLOAD_RELAY_TIMEOUT_MS,
+            )
+        } catch (e: Exception) {
+            Log.w("probtest: relay upload to $relayUrl failed", e)
+
+            throw IllegalStateException(
+                "Upload failed after $UPLOAD_ATTEMPTS attempts " +
+                    "(${lastError?.message ?: "unknown error"}) and the relay refused it too: " +
+                    (e.message ?: "unknown error"),
+                e,
+            )
+        }
+
+        return UploadRouteResult(relayUrl, UPLOAD_ATTEMPTS, relayed = true)
+    }
+
+    /**
      * Pushes the published configuration to the service.
      *
      * The body goes out compressed: a configuration is mostly rule providers,
@@ -668,10 +916,18 @@ class ProbTestPipeline(private val context: Context) {
      * half megabyte upload into a timeout. The endpoint reads
      * `Content-Encoding: gzip` and answers with what it stored, so this is only
      * a smaller request rather than a different one.
+     *
+     * [compressed] is passed in already compressed so a retry after a failed
+     * attempt does not spend the round's time compressing the same document
+     * again.
      */
-    private suspend fun uploadTo(url: String, token: String, document: String): String {
-        val compressed = gzip(document)
-
+    private suspend fun uploadTo(
+        url: String,
+        token: String,
+        compressed: ByteArray,
+        plainBytes: Int,
+        timeoutMs: Long,
+    ) {
         val request = Request.Builder()
             .url(url)
             .header("Content-Type", "application/yaml; charset=utf-8")
@@ -682,7 +938,16 @@ class ProbTestPipeline(private val context: Context) {
             .build()
 
         withContext(Dispatchers.IO) {
-            uploadClient.newCall(request).execute().use { response ->
+            // A fresh call per attempt is the point: the route was moved
+            // between attempts, and a connection kept alive from before the
+            // move would still leave through the node that failed. A failed
+            // call is discarded anyway, so the pool cannot hand one over - the
+            // per-call timeout is the only thing that differs from the client.
+            val call = uploadClient.newCall(request)
+
+            call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+
+            call.execute().use { response ->
                 if (!response.isSuccessful) {
                     error(
                         "Upload endpoint responded with HTTP ${response.code}: " +
@@ -694,10 +959,8 @@ class ProbTestPipeline(private val context: Context) {
 
         Log.i(
             "probtest: uploaded ${compressed.size} bytes of gzip " +
-                "(${document.toByteArray().size} plain) to $url"
+                "($plainBytes plain) to $url"
         )
-
-        return url
     }
 
     /**
@@ -1079,7 +1342,22 @@ class ProbTestPipeline(private val context: Context) {
     private class Downloaded(val text: String?)
 
     private companion object {
-        const val ROUNDS = 3
+        // Two spaced rounds, not three: the third round's only contribution was
+        // time - a node that answers twice, ten seconds apart, on a link this
+        // flaky is already the difference being looked for, and the round that
+        // went to a third pass mostly pruned nodes that were still usable.
+        const val ROUNDS = 2
+
+        // Guards against a round that lost its sources overwriting a working
+        // subscription: below the floor there is no history to compare against,
+        // and a quarter of the previous count in one round is not attrition.
+        const val COLLAPSE_FLOOR = 8L
+        const val COLLAPSE_RATIO = 4L
+
+        // Below this many candidate sources there is no quorum to speak of, so
+        // "half of them answered" would be one source out of two - a round that
+        // is thin by design rather than a reading of the pool.
+        const val MIN_SOURCES = 4
         const val USER_AGENT = "ClashMetaForAndroid/1.0"
         const val MAX_CANDIDATE_BYTES = 8L * 1024 * 1024
 
@@ -1090,15 +1368,6 @@ class ProbTestPipeline(private val context: Context) {
          * for the sum of every read timeout it can take.
          */
         const val DOWNLOAD_TIMEOUT_MS = 90_000L
-
-        /**
-         * The ceiling for pushing a configuration out. Larger than the download
-         * one because it carries the whole document, and a timeout here loses
-         * the round's only result rather than one of its inputs. The body is
-         * compressed, so this is headroom over a transfer that is measured in
-         * tens of seconds, not a figure taken from one.
-         */
-        const val UPLOAD_TIMEOUT_MS = 300_000L
 
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         val YAML_MEDIA_TYPE = "application/yaml; charset=utf-8".toMediaType()

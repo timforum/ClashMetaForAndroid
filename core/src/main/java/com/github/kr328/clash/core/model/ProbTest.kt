@@ -95,6 +95,15 @@ data class ProbTestNode(
     val delays: List<Int> = emptyList(),
     val error: String? = null,
     val rejected: Boolean = false,
+    /**
+     * What the speed gate measured, for the nodes that cleared it.
+     *
+     * Zero means the gate did not run or the node never got that far. Kept
+     * here so a later step can put the round's own ranking to use - the upload
+     * fallback picks the fastest survivors the running profile still has -
+     * instead of guessing from the delay alone.
+     */
+    @SerialName("speedMbps") val speedMbps: Double = 0.0,
 )
 
 @Serializable

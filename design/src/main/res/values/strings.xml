@@ -443,6 +443,8 @@
     <string name="probtest_upload_url_summary">Endpoint that accepts the surviving nodes, e.g. https://example.workers.dev/internal/nodes. Must be https; cleartext http is upgraded automatically. Takes precedence over GitHub.</string>
     <string name="probtest_upload_token">Upload token</string>
     <string name="probtest_upload_token_summary">Sent as a bearer token. Leave empty when the endpoint needs no authentication</string>
+    <string name="probtest_relay_url">Fallback relay</string>
+    <string name="probtest_relay_url_summary">Tried after the upload failed on every node it could reach: it accepts the same body and forwards it from the relay host, so a phone uplink is never the last hop. Leave empty to disable.</string>
     <string name="probtest_actions">Actions</string>
     <string name="probtest_run_now">Run a round now</string>
     <string name="probtest_run_now_summary">Start screening immediately instead of waiting for the next round</string>
