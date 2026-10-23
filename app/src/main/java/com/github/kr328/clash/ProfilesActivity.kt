@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.common.util.setUUID
-import com.github.kr328.clash.common.util.ticker
 import com.github.kr328.clash.design.ProfilesDesign
 import com.github.kr328.clash.design.ui.ToastDuration
 import com.github.kr328.clash.service.model.Profile
@@ -17,7 +16,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import java.util.*
-import java.util.concurrent.TimeUnit
 import com.github.kr328.clash.design.R
 
 class ProfilesActivity : BaseActivity<ProfilesDesign>() {
@@ -25,8 +23,6 @@ class ProfilesActivity : BaseActivity<ProfilesDesign>() {
         val design = ProfilesDesign(this)
 
         setContentDesign(design)
-
-        val ticker = ticker(TimeUnit.MINUTES.toMillis(1))
 
         while (isActive) {
             select<Unit> {
@@ -75,11 +71,6 @@ class ProfilesActivity : BaseActivity<ProfilesDesign>() {
 
                             startActivity(PropertiesActivity::class.intent.setUUID(uuid))
                         }
-                    }
-                }
-                if (activityStarted) {
-                    ticker.onReceive {
-                        design.updateElapsed()
                     }
                 }
             }

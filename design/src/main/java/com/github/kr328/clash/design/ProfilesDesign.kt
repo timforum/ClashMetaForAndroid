@@ -63,10 +63,6 @@ class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context)
         }
     }
 
-    fun updateElapsed() {
-        adapter.updateElapsed()
-    }
-
     init {
         binding.self = this
 

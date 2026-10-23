@@ -81,3 +81,15 @@ fun Long.toDateStr(): String {
     val simpleDateFormat =SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
     return simpleDateFormat.format(Date(this))
 }
+
+/**
+ * The same expiry without the time of day.
+ *
+ * The profile row gives it one line, and at a phone font scale of 1.35 the full
+ * stamp does not fit that line - it ends as "2099-12-30 11:..." - which is the
+ * kind of clipping this row was changed to get rid of. The day a subscription
+ * runs out is the part a reader decides on; the hour is not.
+ */
+fun Long.toDateOnlyStr(): String {
+    return SimpleDateFormat(DATE_DATE_ONLY, Locale.getDefault()).format(Date(this))
+}
