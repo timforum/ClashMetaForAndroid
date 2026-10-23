@@ -76,6 +76,21 @@ data class SpeedTestProgress(
     /** The node that just finished; absent when the core omits empty values. */
     val current: String? = null,
     @SerialName("elapsedMs") val elapsedMs: Long = 0,
+    /**
+     * The fastest node finished so far, and what it measured.
+     *
+     * A manual run is started because the node in use stopped carrying, so
+     * waiting for the whole group before moving the connection leaves the
+     * reader offline for as long as the run takes. The core names the best node
+     * it has finished with as it goes, which is what lets the caller switch as
+     * soon as one usable node is known.
+     */
+    val best: String? = null,
+    @SerialName("bestMbps") val bestMbps: Double = 0.0,
+    /** Group a selection for [best] has to be written to, when it sits below one. */
+    @SerialName("bestOwner") val bestOwner: String? = null,
+    /** Groups from the measured group down to [bestOwner], outermost first. */
+    @SerialName("bestPath") val bestPath: List<String>? = null,
 )
 
 /** Outcome for a single measured node of the group. */

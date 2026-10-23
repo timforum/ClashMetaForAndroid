@@ -19,17 +19,25 @@ import com.github.kr328.clash.core.model.ProxySort
 import com.github.kr328.clash.core.model.SpeedTestOptions
 import com.github.kr328.clash.core.patchSelectorPath
 import com.github.kr328.clash.core.model.SpeedTestEnvelope
+import com.github.kr328.clash.core.model.SpeedTestProgress
 import com.github.kr328.clash.service.model.SpeedTestResults
 import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.model.SpeedTestWatchState
 import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.service.util.SpeedTestProfile
 import com.github.kr328.clash.service.util.logSpeedTestStages
+import com.github.kr328.clash.service.util.sendSpeedTestGroupFinished
 import com.github.kr328.clash.service.util.sendSpeedTestResultsChanged
+import com.github.kr328.clash.service.util.sendSpeedTestRunningChanged
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
 
 /**
@@ -46,6 +54,19 @@ import java.util.concurrent.TimeUnit
  */
 class SpeedTestWorker : BaseService() {
     private val jobs = mutableListOf<Job>()
+
+    /**
+     * Serialises the rounds this process runs.
+     *
+     * Two measurements at once would drive the same live adapters - a periodic
+     * pass over the pool and a toolbar run over one of the groups it is
+     * measuring - and the second one would both distort the first one's
+     * figures and spend the device's data twice. The lock makes the toolbar's
+     * request wait its turn instead of losing it, which is the difference
+     * between a button that is slow today and a button that silently does
+     * nothing.
+     */
+    private val runLock = Mutex()
 
     /**
      * Whether a screening pass is in flight in this process.
@@ -80,6 +101,12 @@ class SpeedTestWorker : BaseService() {
         createChannels()
         foreground()
 
+        // A mark left behind by a process that was killed mid-run is not a run:
+        // this service is the only thing that can be measuring, and it has not
+        // started one yet. Clearing it here is what keeps a stale spinner from
+        // outliving the round it described.
+        ServiceStore(applicationContext).clearSpeedTestRunning()
+
         launch {
             delay(TimeUnit.SECONDS.toMillis(10))
 
@@ -108,6 +135,24 @@ class SpeedTestWorker : BaseService() {
 
                 jobs.add(launch { run() })
             }
+        } else if (intent?.action == Intents.ACTION_SPEEDTEST_GROUP) {
+            val group = intent.getStringExtra(Intents.EXTRA_GROUP).orEmpty()
+
+            if (group.isEmpty()) {
+                Log.d("speedtest: a toolbar run arrived without a group")
+
+                return START_NOT_STICKY
+            }
+
+            // Queued rather than dropped when a round is in flight: the reader
+            // pressed the button, so the answer has to arrive even if it has to
+            // wait for the group already being measured. The lock is what makes
+            // the wait safe; this log is what explains a late start.
+            if (runLock.isLocked) {
+                Log.d("speedtest: $group: queued behind the round in flight")
+            }
+
+            jobs.add(launch { runFromToolbar(group) })
         } else if (intent?.action == Intents.ACTION_SPEEDTEST_WATCH) {
             jobs.add(launch { watch() })
         }
@@ -117,6 +162,9 @@ class SpeedTestWorker : BaseService() {
 
     private suspend fun run() {
         val store = ServiceStore(applicationContext)
+
+        screening = true
+
         val startedAt = System.currentTimeMillis()
         nodesMeasured = 0L
 
@@ -124,23 +172,42 @@ class SpeedTestWorker : BaseService() {
             val groups = liveGroups(store)
 
             groups.forEachIndexed { index, group ->
-                updateProgress(
-                    getString(R.string.speed_test_group_progress, group, index + 1, groups.size)
-                )
+                // Taken per group rather than for the whole pass: a toolbar run
+                // that arrives mid-pass then waits for the group being measured
+                // instead of for however long the rest of the pass still needs -
+                // twenty minutes of spinner for a button the reader pressed is
+                // not an answer.
+                runLock.withLock {
+                    updateProgress(
+                        getString(R.string.speed_test_group_progress, group, index + 1, groups.size)
+                    )
 
-                try {
-                    if (screen(store, group)) {
-                        // Only a failover is worth a notification: a pass keeps
-                        // quiet so the hourly rhythm never becomes noise.
-                        notifySwitched(store, group)
+                    // The mark is what puts the spinner on this group's toolbar
+                    // button in the UI process: a periodic pass is exactly the
+                    // run the screen cannot see starting, so without it the
+                    // button sits idle while the group is being measured.
+                    markRunning(store, group)
+
+                    val beat = heartbeat(store, group)
+
+                    try {
+                        if (screen(store, group)) {
+                            // Only a failover is worth a notification: a pass keeps
+                            // quiet so the hourly rhythm never becomes noise.
+                            notifySwitched(store, group)
+                        }
+                    } catch (e: Throwable) {
+                        // Not merely Exception: a JNI bridge that cannot resolve a
+                        // symbol throws a LinkageError, and letting that escape
+                        // would end the process which hosts the core, so every
+                        // group would lose its connection at once instead of
+                        // leaving one group broken.
+                        Log.w("speedtest: $group failed", e)
+                    } finally {
+                        beat.cancel()
+
+                        clearRunning(store, group)
                     }
-                } catch (e: Throwable) {
-                    // Not merely Exception: a JNI bridge that cannot resolve a
-                    // symbol throws a LinkageError, and letting that escape
-                    // would end the process which hosts the core, so every
-                    // group would lose its connection at once instead of
-                    // leaving one group broken.
-                    Log.w("speedtest: $group failed", e)
                 }
             }
         } finally {
@@ -157,6 +224,259 @@ class SpeedTestWorker : BaseService() {
 
             SpeedTestReceiver.scheduleNext(this)
         }
+    }
+
+    /**
+     * Measures one group the toolbar asked for, and moves the connection onto
+     * the winner.
+     *
+     * The round used to run in the proxy screen's own coroutine, which meant
+     * walking back to the group list cancelled it: the screen owned the work,
+     * so the work ended with the screen. Here it belongs to the service, and
+     * the screen only asks for it and watches the mark - which is also why the
+     * answer arrives as broadcasts rather than as a return value.
+     *
+     * The switch is left on by the caller, so a finished round also re-arms
+     * the periodic pass and the watch: the first round of the set is this one.
+     */
+    private suspend fun runFromToolbar(group: String) {
+        val store = ServiceStore(applicationContext)
+
+        // Answered before the lock is taken: a toolbar run queued behind a
+        // periodic pass can wait twenty minutes, and a toggle that sits
+        // unchanged for that long reads as a press that did nothing. The mark
+        // is what puts the spinner on the button in the UI process, and the
+        // heartbeat keeps it alive through the wait as well as the measurement.
+        if (group in store.speedTestGroups) {
+            markRunning(store, group)
+        }
+
+        val beat = heartbeat(store, group)
+
+        try {
+            runLock.withLock {
+                // Turned off before the request reached the service: nothing to
+                // do, and starting anyway would connect through a group the
+                // reader had just told the app to leave alone.
+                if (group !in store.speedTestGroups) {
+                    clearRunning(store, group)
+
+                    Log.d("speedtest: $group: the switch is off, the request is dropped")
+
+                    return@withLock
+                }
+
+                markRunning(store, group)
+
+                updateProgress(getString(R.string.speed_test_group_progress, group, 1, 1))
+
+                var ok = false
+
+                try {
+                    ok = runToolbarRound(store, group)
+                } catch (e: Throwable) {
+                    Log.w("speedtest: $group failed", e)
+                } finally {
+                    clearRunning(store, group)
+
+                    SpeedTestReceiver.scheduleNext(this)
+                    SpeedTestReceiver.scheduleWatch(this)
+
+                    sendSpeedTestGroupFinished(group, ok)
+                }
+            }
+        } finally {
+            beat.cancel()
+
+            clearRunning(store, group)
+        }
+    }
+
+    /**
+     * One toolbar round: measure, keep the figures, and move the selection onto
+     * the fastest member that passed.
+     *
+     * The periodic pass only switches when the node in use stopped working,
+     * because it is repairing a connection nobody asked about. This is the
+     * reader asking for the best node now, so the winner takes the selection
+     * whether or not the previous node still works.
+     */
+    private suspend fun runToolbarRound(store: ServiceStore, group: String): Boolean {
+        val startedAt = System.currentTimeMillis()
+
+        // A manual run is started because the node in use stopped carrying, so
+        // waiting for the whole group before moving the connection leaves the
+        // reader offline for the length of the run. The first node the core
+        // finishes that clears 1 MB/s takes the connection immediately, and a
+        // later, faster node replaces it - the fastest one still wins, only
+        // sooner than the ranking at the end of the run.
+        //
+        // The patch is made on this side of a channel rather than inside the
+        // callback: the callback is hosted by the run itself, and calling back
+        // into the same core from it would make the measurement wait on a call
+        // the measurement is hosting.
+        val early = Channel<SpeedTestProgress>(Channel.CONFLATED)
+
+        val switcher = launch {
+            var switchedMbps = 0.0
+
+            for (progress in early) {
+                val name = progress.best ?: continue
+                val mbps = progress.bestMbps
+
+                if (name.isEmpty() || mbps < AUTO_SWITCH_FLOOR_MBPS || mbps <= switchedMbps)
+                    continue
+
+                // Turned off during the run: the figures may stay, the
+                // connection must not move.
+                if (group !in store.speedTestGroups)
+                    continue
+
+                val moved = patchSelectorPath(
+                    group,
+                    name,
+                    progress.bestPath ?: listOf(group),
+                    { it -> Clash.queryGroup(it, ProxySort.Default) },
+                    { from, to -> Clash.patchSelector(from, to) },
+                ).orEmpty()
+
+                if (moved.isNotEmpty()) {
+                    switchedMbps = mbps
+
+                    Log.d(
+                        "speedtest: $group: switched early to '$name' at " +
+                            "${"%.1f".format(mbps)}Mbps via ${moved.joinToString(" -> ")}"
+                    )
+                }
+            }
+        }
+
+        // The video group proves YouTube playback; every other group only
+        // needs latency plus a generic transfer, so the YouTube probes are
+        // left out of its run rather than spending traffic on them.
+        val envelope = try {
+            Clash.speedTestGroup(group, SpeedTestProfile.options(group)) { early.trySend(it) }
+        } finally {
+            early.close()
+
+            switcher.cancelAndJoin()
+        }
+
+        if (envelope.ok) {
+            logSpeedTestStages(
+                group,
+                envelope,
+                System.currentTimeMillis() - startedAt,
+            )
+        } else {
+            Log.d("speedtest: $group: ${envelope.error}")
+
+            return false
+        }
+
+        val best = envelope.best
+
+        if (best.isNullOrEmpty()) {
+            Log.w("speedtest: $group: nothing cleared the gate")
+
+            return false
+        }
+
+        val top = envelope.results.firstOrNull { r -> r.name == best }
+
+        // The whole list, not just the winner: the proxy screen shows a
+        // figure beside every node the round measured, and this is the only
+        // moment those figures exist.
+        recordResults(store, envelope)
+
+        store.setSpeedTestSelection(
+            group,
+            SpeedTestSelection(
+                default = best,
+                backup = envelope.backup.orEmpty(),
+                mbps = top?.mbps ?: 0.0,
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
+
+        // Pressing the button again turns the switch off, and the request to
+        // stop has to win even though the measurement it was sent during cannot
+        // be interrupted: the figures stay, but the connection is not moved.
+        if (group !in store.speedTestGroups) {
+            Log.d("speedtest: $group: the switch was turned off during the run, selection left alone")
+
+            return true
+        }
+
+        // A node behind a sub group cannot be picked from the group above
+        // it: Set names a member, so the whole route down to the node has
+        // to be moved, not just the group that holds it.
+        val path = top?.path ?: listOf(group)
+
+        val moved = patchSelectorPath(
+            group,
+            best,
+            path,
+            { name -> Clash.queryGroup(name, ProxySort.Default) },
+            { from, name -> Clash.patchSelector(from, name) },
+        ).orEmpty()
+
+        if (moved.isNotEmpty()) {
+            Log.d("speedtest: $group: switched to '$best' via ${moved.joinToString(" -> ")}")
+        }
+
+        return true
+    }
+
+    /**
+     * Tells the UI process a round started for [group].
+     *
+     * Written before the measurement rather than after it: the spinner has to
+     * appear while the work is being done, and a mark written at the end would
+     * only ever describe a round that already finished.
+     */
+    private fun markRunning(store: ServiceStore, group: String) {
+        store.speedTestRunningGroup = group
+        store.speedTestRunningSince = System.currentTimeMillis()
+
+        sendSpeedTestRunningChanged()
+    }
+
+    /**
+     * Refreshes [group]'s mark while the measurement runs.
+     *
+     * The mark is read in another process, which cannot see that this one is
+     * still alive: a killed worker leaves the mark behind, and the screen then
+     * shows a spinner for a round that will never end. The mark therefore
+     * carries a timestamp with a short window (see
+     * [ServiceStore.SPEED_TEST_RUNNING_TTL_MS]), and a long round keeps it
+     * alive by rewriting it. Folded into a coroutine the caller cancels, so an
+     * abandoned round stops beating the moment it stops working.
+     */
+    private fun heartbeat(store: ServiceStore, group: String) = launch {
+        while (isActive) {
+            if (store.speedTestRunningGroup == group) {
+                store.speedTestRunningSince = System.currentTimeMillis()
+            }
+
+            delay(HEARTBEAT_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * Clears [group]'s mark, if it still holds it.
+     *
+     * Guarded by the group name so a round that ends after the reader has
+     * already turned another group on cannot clear that group's mark.
+     */
+    private fun clearRunning(store: ServiceStore, group: String) {
+        if (store.speedTestRunningGroup != group) {
+            return
+        }
+
+        store.clearSpeedTestRunning(group)
+
+        sendSpeedTestRunningChanged()
     }
 
     /**
@@ -940,6 +1260,19 @@ class SpeedTestWorker : BaseService() {
         // failover may choose from. Matches the core's own bound on the walk a
         // measurement does.
         private const val MAX_GROUP_DEPTH = 8
+
+        // How often a running mark is refreshed. Must stay well under
+        // ServiceStore.SPEED_TEST_RUNNING_TTL_MS, and a long round is the
+        // reason the mark cannot simply be written once: the screen in the
+        // other process needs to be able to tell a live round from one whose
+        // worker was killed.
+        private const val HEARTBEAT_INTERVAL_MS = 20L * 1000L
+
+        // The floor a node has to clear before a manual run moves the
+        // connection onto it early: 1 MB/s, the unit readers quote, which is
+        // eight megabits - the unit the screen prints. Below this a node is
+        // alive but not worth interrupting the run for.
+        private const val AUTO_SWITCH_FLOOR_MBPS = 8.0
     }
 
     override fun onBind(intent: Intent?): IBinder {

@@ -34,6 +34,19 @@ class Broadcasts(private val context: Application) {
          * every activity reload a list of proxies it never displays.
          */
         fun onSpeedTestResultsChanged() {}
+
+        /**
+         * A measurement started or stopped in :background. Only the proxy screen
+         * draws the spinner, so the default does nothing.
+         */
+        fun onSpeedTestRunningChanged() {}
+
+        /**
+         * One toolbar round finished in :background. Same audience as the mark:
+         * the screen that asked for it has usually been left by now, and a
+         * screen that is still open just reloads the group.
+         */
+        fun onSpeedTestGroupFinished(group: String, ok: Boolean) {}
     }
 
     /**
@@ -130,6 +143,17 @@ class Broadcasts(private val context: Application) {
                     receivers.forEach {
                         it.onSpeedTestResultsChanged()
                     }
+                Intents.ACTION_SPEEDTEST_RUNNING_CHANGED ->
+                    receivers.forEach {
+                        it.onSpeedTestRunningChanged()
+                    }
+                Intents.ACTION_SPEEDTEST_GROUP_FINISHED ->
+                    receivers.forEach {
+                        it.onSpeedTestGroupFinished(
+                            intent.getStringExtra(Intents.EXTRA_GROUP).orEmpty(),
+                            intent.getBooleanExtra(Intents.EXTRA_OK, false),
+                        )
+                    }
             }
         }
     }
@@ -158,6 +182,8 @@ class Broadcasts(private val context: Application) {
                 addAction(Intents.ACTION_PROBTEST_PROGRESS)
                 addAction(Intents.ACTION_PROBTEST_FINISHED)
                 addAction(Intents.ACTION_SPEEDTEST_RESULTS_CHANGED)
+                addAction(Intents.ACTION_SPEEDTEST_RUNNING_CHANGED)
+                addAction(Intents.ACTION_SPEEDTEST_GROUP_FINISHED)
             })
 
             clashRunning = StatusClient(context).currentProfile() != null

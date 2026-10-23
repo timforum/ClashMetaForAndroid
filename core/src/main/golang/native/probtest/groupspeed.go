@@ -37,6 +37,14 @@ type GroupProgress struct {
 	Failed    int    `json:"failed"`
 	Current   string `json:"current,omitempty"`
 	ElapsedMs int64  `json:"elapsedMs,omitempty"`
+	// Best names the fastest node finished so far, with what it measured and
+	// where a selection for it has to be written. A reader who has to answer
+	// "connect me now" - a manual run started because the current node stopped
+	// working - can act on this instead of waiting for the whole group.
+	Best      string   `json:"best,omitempty"`
+	BestMbps  float64  `json:"bestMbps,omitempty"`
+	BestOwner string   `json:"bestOwner,omitempty"`
+	BestPath  []string `json:"bestPath,omitempty"`
 }
 
 // GroupOutcome is what one node measured in this run. A node that cleared the
@@ -102,10 +110,21 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 	outcomes := make([]GroupOutcome, total)
 	var done, passed, failed int64
 
+	// The running best, guarded because nodes finish on their own goroutines
+	// while emit reads it. Only a node that cleared the gate can become the
+	// best: a broken node has no throughput to offer.
+	var bestMu sync.Mutex
+	var bestName, bestOwner string
+	var bestPath []string
+	bestMbps := 0.0
+
 	emit := func(current string) {
 		if onProgress == nil {
 			return
 		}
+		bestMu.Lock()
+		best, bestSpeed, owner, path := bestName, bestMbps, bestOwner, bestPath
+		bestMu.Unlock()
 		onProgress(GroupProgress{
 			Group:     group,
 			Stage:     StageSpeedTest,
@@ -116,6 +135,10 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 			Failed:    int(atomic.LoadInt64(&failed)),
 			Current:   current,
 			ElapsedMs: time.Since(started).Milliseconds(),
+			Best:      best,
+			BestMbps:  bestSpeed,
+			BestOwner: owner,
+			BestPath:  path,
 		})
 	}
 	emit("")
@@ -278,6 +301,16 @@ func GroupSpeedTest(ctx context.Context, group string, nodes []GroupNode, sp Spe
 					if !sp.SkipReachability {
 						out.Tier = SpeedTier(r.mbps)
 					}
+					// Recorded before the counter that announces this node, so
+					// the event the caller reads already names the new best.
+					bestMu.Lock()
+					if r.mbps > bestMbps {
+						bestMbps = r.mbps
+						bestName = n.Name
+						bestOwner = n.Owner
+						bestPath = n.Path
+					}
+					bestMu.Unlock()
 					atomic.AddInt64(&passed, 1)
 				}
 			case <-ctx.Done():

@@ -92,6 +92,18 @@
                         android:background="@drawable/bg_toolbar_icon_highlight"
                         android:onClick="@{() -> self.requestSpeedTest()}">
 
+                        <!-- Fills the button rather than the icon: drawn at the
+                             icon's own size the ring sits underneath the glyph,
+                             which is opaque, so a round in flight looked exactly
+                             like a round that was not running. -->
+                        <ProgressBar
+                            android:id="@+id/speed_test_progress_view"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:layout_gravity="center"
+                            android:indeterminateTint="@color/color_speed_test_running"
+                            android:visibility="gone" />
+
                         <ImageView
                             android:id="@+id/speed_test_view"
                             android:layout_width="@dimen/item_tailing_component_size"
@@ -100,12 +112,6 @@
                             android:contentDescription="@string/speed_test"
                             android:padding="@dimen/toolbar_image_action_padding"
                             android:src="@drawable/ic_baseline_speed" />
-
-                        <ProgressBar
-                            android:id="@+id/speed_test_progress_view"
-                            android:layout_width="@dimen/item_tailing_component_size"
-                            android:layout_height="@dimen/item_tailing_component_size"
-                            android:visibility="gone" />
                     </FrameLayout>
 
                     <ImageView

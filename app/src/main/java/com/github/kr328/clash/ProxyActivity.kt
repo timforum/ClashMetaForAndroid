@@ -1,23 +1,12 @@
 package com.github.kr328.clash
 
 import android.view.KeyEvent
-import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
-import com.github.kr328.clash.core.model.Proxy
-import com.github.kr328.clash.core.model.ProxySort
-import com.github.kr328.clash.core.model.SpeedTestEnvelope
-import com.github.kr328.clash.core.model.SpeedTestJson
-import com.github.kr328.clash.core.model.SpeedTestOptions
-import com.github.kr328.clash.core.patchSelectorPath
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
-import com.github.kr328.clash.service.model.SpeedTestResults
-import com.github.kr328.clash.service.model.SpeedTestSelection
 import com.github.kr328.clash.service.store.ServiceStore
-import com.github.kr328.clash.service.util.SpeedTestProfile
-import com.github.kr328.clash.service.util.logSpeedTestStages
 import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -80,6 +69,37 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                         // would otherwise show the previous round until then.
                         Event.SpeedTestResultsChanged -> {
                             design.requests.send(ProxyDesign.Request.ReloadAll)
+                        }
+                        Event.SpeedTestRunningChanged -> {
+                            // Only the toolbar's state changed: repainting the
+                            // toggle is enough, and reloading the group would
+                            // query the core again for a value that did not
+                            // move.
+                            design.refreshSpeedTestButton()
+                        }
+                        Event.ActivityStart -> {
+                            // Coming back to the screen is the moment a round
+                            // that ran while the activity was stopped becomes
+                            // visible: the broadcasts it sent were missed, so
+                            // the toggle is repainted from the mark and the
+                            // group re-read in case a selection moved.
+                            design.refreshSpeedTestButton()
+                            design.reloadVisible()
+                        }
+                        is Event.SpeedTestFinished -> {
+                            val index = names.indexOf(it.group)
+
+                            if (index >= 0) {
+                                // The round may have moved the selection and
+                                // written figures for every node it measured,
+                                // so the group is read again rather than the
+                                // repaint alone.
+                                design.requests.send(ProxyDesign.Request.Reload(index))
+                            }
+
+                            if (!it.ok) {
+                                launch { design.showSpeedTestFailed() }
+                            }
                         }
                         else -> Unit
                     }
@@ -146,13 +166,29 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                                     serviceStore.speedTestGroups - group
 
                             if (enabling) {
-                                launch {
-                                    runSpeedTest(index, group, states, serviceStore, design)
-                                }
+                                // Measured by the service rather than by this
+                                // screen: walking back to the group list must
+                                // not end the round, so the run cannot belong
+                                // to an activity that can be closed. The
+                                // spinner comes back through the running mark
+                                // for the same reason.
+                                //
+                                // The tint is repainted now because the mark
+                                // only arrives once the worker actually starts:
+                                // a request queued behind another round would
+                                // otherwise leave the toggle looking untouched,
+                                // which reads as a press that did nothing.
+                                design.refreshSpeedTestButton()
+
+                                SpeedTestReceiver.requestGroup(this@ProxyActivity, group)
                             } else {
-                                // Off means off: release the mark the toggle claimed,
-                                // and let the set decide whether a round is still due.
-                                design.setSpeedTestRunning(index, false)
+                                // Off means off: release the mark this group's
+                                // run holds so the spinner stops now rather
+                                // than when the measurement it interrupts
+                                // returns.
+                                serviceStore.clearSpeedTestRunning(group)
+
+                                design.refreshSpeedTestButton()
 
                                 if (serviceStore.speedTestGroups.isEmpty()) {
                                     // Nothing is enabled, so nothing is on its
@@ -185,143 +221,5 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                 }
             }
         }
-    }
-
-    /**
-     * Measures one group from the toolbar toggle: keeps the ranking for the
-     * periodic supervisor, then moves the selector onto the winner so the
-     * connection starts on the fastest node that passed.
-     *
-     * The running mark is released in a finally so a failure cannot leave the
-     * toolbar spinning; a failed run simply reports the toast and keeps the
-     * switch on, since the supervisor will retry it anyway.
-     */
-    private suspend fun runSpeedTest(
-        index: Int,
-        group: String,
-        states: List<ProxyState>,
-        store: ServiceStore,
-        design: ProxyDesign,
-    ) {
-        try {
-            // The video group proves YouTube playback; every other group only
-            // needs latency plus a generic transfer, so the YouTube probes are
-            // left out of its run rather than spending traffic on them.
-            val options = SpeedTestJson.encodeToString(
-                SpeedTestOptions.serializer(),
-                SpeedTestProfile.options(group)
-            )
-
-            val startedAt = System.currentTimeMillis()
-
-            val envelope = SpeedTestJson.decodeFromString(
-                SpeedTestEnvelope.serializer(),
-                withClash { speedTestGroup(group, options) }
-            )
-
-            // The same breakdown the periodic round prints. A reader who
-            // pressed the button is the one most likely to be looking at a pool
-            // that is costing this app half an hour a round, and without this
-            // they cannot tell whether the latency cap is what is spending it.
-            if (envelope.ok) {
-                logSpeedTestStages(group, envelope, System.currentTimeMillis() - startedAt)
-            }
-
-            val best = envelope.best
-
-            if (!envelope.ok || best.isNullOrEmpty()) {
-                design.showSpeedTestFailed()
-
-                return
-            }
-
-            val top = envelope.results.firstOrNull { r -> r.name == best }
-
-            // The whole list, not just the winner: the proxy screen shows a
-            // figure beside every node the round measured, and this is the
-            // only moment those figures exist.
-            mergeResults(
-                store,
-                envelope.results.mapNotNull { r ->
-                    r.mbps?.takeIf { r.passed }?.let { r.name to it }
-                }.toMap()
-            )
-
-            store.setSpeedTestSelection(
-                group,
-                SpeedTestSelection(
-                    default = best,
-                    backup = envelope.backup.orEmpty(),
-                    mbps = top?.mbps ?: 0.0,
-                    updatedAt = System.currentTimeMillis(),
-                )
-            )
-
-            // A node behind a sub group cannot be picked from the group above
-            // it: Set names a member, so the whole route down to the node has
-            // to be moved, not just the group that holds it.
-            val path = top?.path ?: listOf(group)
-
-            // The core is only loaded in the service process, so a switch asked
-            // for here has to travel there and back. Going straight to Clash
-            // instead would patch an empty core and report a move that nothing
-            // ever makes.
-            val moved = withClash {
-                patchSelectorPath(
-                    group,
-                    best,
-                    path,
-                    { name -> queryProxyGroup(name, ProxySort.Default) },
-                    { from, name -> patchSelector(from, name) },
-                )
-            }.orEmpty()
-
-            if (moved.isNotEmpty()) {
-                Log.d(
-                    "speedtest: $group: switched to '$best' " +
-                        "via ${moved.joinToString(" -> ")}"
-                )
-
-                // What the group itself now routes to: the sub group it was
-                // pointed at, or the node itself when it holds it directly.
-                states[index].now = path.getOrElse(1) { best }
-
-                design.requestRedrawVisible()
-            }
-
-            // First round of the set is this one, already done; the supervisor
-            // takes over from here on the configured interval, and so does the
-            // tighter watch of the node this run just connected through.
-            SpeedTestReceiver.scheduleNext(this)
-            SpeedTestReceiver.scheduleWatch(this)        } catch (e: Exception) {
-            design.showSpeedTestFailed()
-        } finally {
-            design.setSpeedTestRunning(index, false)
-
-            design.requests.send(ProxyDesign.Request.Reload(index))
-        }
-    }
-
-    /**
-     * Folds one round's figures into what is already stored.
-     *
-     * Merged rather than replaced: a pass that measures one group must not
-     * erase what the periodic pass over the others measured, and a node the
-     * round did not reach this time keeps the last figure anyone took, which
-     * is a number about that node rather than about this group.
-     */
-    private fun mergeResults(
-        store: ServiceStore,
-        measured: Map<String, Double>,
-    ) {
-        if (measured.isEmpty()) {
-            return
-        }
-
-        val merged = store.speedTestResults().mbps.toMutableMap()
-
-        measured.forEach { (name, mbps) -> merged[name] = mbps }
-
-        store.setSpeedTestResults(SpeedTestResults(merged, System.currentTimeMillis()))
     }
 }

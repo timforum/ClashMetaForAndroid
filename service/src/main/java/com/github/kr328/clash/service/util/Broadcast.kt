@@ -107,3 +107,31 @@ fun Context.sendProbTestFinished(published: Boolean, summary: String) {
 fun Context.sendSpeedTestResultsChanged() {
     sendBroadcastSelf(Intent(Intents.ACTION_SPEEDTEST_RESULTS_CHANGED))
 }
+
+/**
+ * Tells the UI process which group a measurement is running for.
+ *
+ * A run started from the toolbar lives in :background so it survives the
+ * screen that asked for it, which also means the screen can no longer know
+ * about it from a local field: the spinner has to come from a value both
+ * processes can see, and this is the nudge that makes the repaint immediate
+ * rather than at the next reload.
+ */
+fun Context.sendSpeedTestRunningChanged() {
+    sendBroadcastSelf(Intent(Intents.ACTION_SPEEDTEST_RUNNING_CHANGED))
+}
+
+/**
+ * Tells the UI process how a toolbar run ended.
+ *
+ * [ok] false covers every way a run can come back with nothing: the group
+ * disappeared, the core refused it, or no member cleared the gate. The screen
+ * shows the same toast the run used to show when it was its own.
+ */
+fun Context.sendSpeedTestGroupFinished(group: String, ok: Boolean) {
+    sendBroadcastSelf(
+        Intent(Intents.ACTION_SPEEDTEST_GROUP_FINISHED)
+            .putExtra(Intents.EXTRA_GROUP, group)
+            .putExtra(Intents.EXTRA_OK, ok)
+    )
+}

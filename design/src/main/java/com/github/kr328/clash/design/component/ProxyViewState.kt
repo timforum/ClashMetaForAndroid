@@ -13,7 +13,13 @@ class ProxyViewState(
     val config: ProxyViewConfig,
     val proxy: Proxy,
     private val parent: ProxyState,
-    private val link: ProxyState?
+    private val link: ProxyState?,
+    /**
+     * Whether the last screening round measured this node: a row with a figure
+     * gets the green tick in its corner, so "measured and carrying" is
+     * distinguishable from "not measured yet" without reading the second line.
+     */
+    val hasSpeed: Boolean = false,
 ) {
     val paint = Paint()
     val rect = Rect()

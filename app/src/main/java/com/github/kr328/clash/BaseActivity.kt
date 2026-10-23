@@ -174,6 +174,14 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(),
         events.trySend(Event.SpeedTestResultsChanged)
     }
 
+    override fun onSpeedTestRunningChanged() {
+        events.trySend(Event.SpeedTestRunningChanged)
+    }
+
+    override fun onSpeedTestGroupFinished(group: String, ok: Boolean) {
+        events.trySend(Event.SpeedTestFinished(group, ok))
+    }
+
     override fun onServiceRecreated() {
         events.trySend(Event.ServiceRecreated)
     }
@@ -224,16 +232,25 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(),
         this.dayNight = dayNight
     }
 
-    enum class Event {
-        ServiceRecreated,
-        ActivityStart,
-        ActivityStop,
-        ClashStop,
-        ClashStart,
-        ProfileLoaded,
-        ProfileChanged,
-        ProfileUpdateCompleted,
-        ProfileUpdateFailed,
-        SpeedTestResultsChanged,
+    sealed class Event {
+        object ServiceRecreated : Event()
+        object ActivityStart : Event()
+        object ActivityStop : Event()
+        object ClashStop : Event()
+        object ClashStart : Event()
+        object ProfileLoaded : Event()
+        object ProfileChanged : Event()
+        object ProfileUpdateCompleted : Event()
+        object ProfileUpdateFailed : Event()
+        object SpeedTestResultsChanged : Event()
+        object SpeedTestRunningChanged : Event()
+
+        /**
+         * One toolbar round finished in :background. The screen only asked for
+         * it - the run belongs to the service so it can outlive the screen - so
+         * the group it measured and whether it found a node both travel with
+         * the event rather than being read back out of a local field.
+         */
+        data class SpeedTestFinished(val group: String, val ok: Boolean) : Event()
     }
 }

@@ -29,11 +29,19 @@ object Intents {
     val ACTION_PROBTEST_FINISHED = "$packageName.intent.action.PROBTEST_FINISHED"
     val ACTION_SPEEDTEST_REQUEST = "$packageName.intent.action.SPEEDTEST_REQUEST"
     val ACTION_SPEEDTEST_WATCH = "$packageName.intent.action.SPEEDTEST_WATCH"
+    // One group asked for by the toolbar: measured in :background rather than
+    // by the screen that asked, so leaving the screen cannot end it.
+    val ACTION_SPEEDTEST_GROUP = "$packageName.intent.action.SPEEDTEST_GROUP"
+    val ACTION_SPEEDTEST_RUNNING_CHANGED =
+        "$packageName.intent.action.SPEEDTEST_RUNNING_CHANGED"
+    val ACTION_SPEEDTEST_GROUP_FINISHED =
+        "$packageName.intent.action.SPEEDTEST_GROUP_FINISHED"
     val ACTION_SPEEDTEST_RESULTS_CHANGED =
         "$packageName.intent.action.SPEEDTEST_RESULTS_CHANGED"
 
     // Group whose speed screening produced a progress or a result.
     const val EXTRA_GROUP = "group"
+    const val EXTRA_OK = "ok"
 
     const val EXTRA_STOP_REASON = "stop_reason"
     const val EXTRA_UUID = "uuid"

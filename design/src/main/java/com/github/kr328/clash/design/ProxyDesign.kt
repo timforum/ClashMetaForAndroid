@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.view.KeyEvent
 import android.view.View
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
@@ -76,9 +77,6 @@ class ProxyDesign(
 
     private var horizontalScrolling = false
 
-    // Whose speed test is in flight, or -1 when none: a second group must not
-    // start one until the first returns, so the spinner always means something.
-    private var speedTestingIndex = -1
     private val verticalBottomScrolled: Boolean
         get() = adapter.states[binding.pagesView.currentItem].bottom
     private var urlTesting: Boolean
@@ -96,7 +94,20 @@ class ProxyDesign(
         parent: ProxyState,
         links: Map<String, ProxyState>
     ) {
-        adapter.updateAdapter(position, sortedBySpeed(withSpeeds(proxies)), selectable, parent, links)
+        // Read once: the figures drive the second line, the order and the tick
+        // in the corner, and reading the store three times could show a round
+        // that finished between two of the reads in only two of the three.
+        val speeds = serviceStore.speedTestResults().mbps
+        val measured = speeds.filterValues { it > 0.0 }.keys
+
+        adapter.updateAdapter(
+            position,
+            sortedBySpeed(withSpeeds(proxies, speeds), speeds),
+            selectable,
+            parent,
+            links,
+            measured,
+        )
 
         adapter.states[position].urlTesting = false
 
@@ -126,9 +137,7 @@ class ProxyDesign(
      * behind it, and printing a figure against a branch would be reporting a
      * number that describes nothing.
      */
-    private fun withSpeeds(proxies: List<Proxy>): List<Proxy> {
-        val speeds = serviceStore.speedTestResults().mbps
-
+    private fun withSpeeds(proxies: List<Proxy>, speeds: Map<String, Double>): List<Proxy> {
         if (speeds.isEmpty()) {
             return proxies
         }
@@ -161,12 +170,10 @@ class ProxyDesign(
      * Within the unknown group the core's order is left alone, so the list is
      * still stable and does not shuffle between reloads.
      */
-    private fun sortedBySpeed(proxies: List<Proxy>): List<Proxy> {
+    private fun sortedBySpeed(proxies: List<Proxy>, speeds: Map<String, Double>): List<Proxy> {
         if (uiStore.proxySort != ProxySort.Speed) {
             return proxies
         }
-
-        val speeds = serviceStore.speedTestResults().mbps
 
         if (speeds.isEmpty()) {
             return proxies
@@ -361,70 +368,78 @@ class ProxyDesign(
     }
 
     /**
-     * The toolbar's speed toggle. The running mark is claimed here rather than
-     * in the activity: two taps in the same frame would otherwise queue two
-     * requests, and one run at a time keeps the spinner honest. The activity
-     * releases the mark again whether the tap turned the switch on or off.
+     * The toolbar's speed toggle.
+     *
+     * Asking is all this does: the round itself runs in the service, so leaving
+     * the screen cannot end it, and the spinner is painted from the running
+     * mark the service writes rather than from anything kept here. A tap while
+     * a round is in flight therefore turns the switch off - the request to stop
+     * - instead of being swallowed by a local "one at a time" guard.
      */
     fun requestSpeedTest() {
-        if (speedTestingIndex != -1)
-            return
-
         // Nothing to toggle without a group: the toolbar hides the icon, but a
         // key event can still land here and an index would be a lie.
         if (groupNames.isEmpty())
             return
 
-        speedTestingIndex = binding.pagesView.currentItem
-
-        refreshSpeedTestButton()
-
         requests.trySend(Request.SpeedTest(binding.pagesView.currentItem))
     }
 
     /**
-     * Marks [index] as measuring (or idle when [running] is false) and repaints
-     * the toggle when that group is the one on screen.
+     * Re-reads the group on screen.
+     *
+     * Used when the screen comes back: a round that ran while the activity was
+     * stopped may have moved the selection, and its broadcasts were sent into a
+     * stopped screen that had no observer to receive them.
      */
-    fun setSpeedTestRunning(index: Int, running: Boolean) {
-        speedTestingIndex = if (running) index else -1
+    fun reloadVisible() {
+        if (groupNames.isEmpty())
+            return
 
-        if (index == binding.pagesView.currentItem)
-            refreshSpeedTestButton()
+        requests.trySend(Request.Reload(binding.pagesView.currentItem))
     }
 
     /**
      * Paints the speed toggle for the group on screen: highlighted while the
-     * per-group switch is on ([ServiceStore.speedTestGroups]) and spinning
-     * while its measurement is in flight. The tint comes from the view, not
-     * the drawable, so turning the switch off falls back to the icon's own
-     * neutral tint by clearing it.
+     * per-group switch is on ([ServiceStore.speedTestGroups]) and showing the
+     * spinner while the service is measuring it. Both come from the service
+     * preferences, so a round the periodic pass started shows up here exactly
+     * like one the toolbar asked for. The tint comes from the view, not the
+     * drawable, so turning the switch off falls back to the icon's own neutral
+     * tint by clearing it.
      */
     fun refreshSpeedTestButton() {
         if (groupNames.isEmpty())
             return
 
         val index = binding.pagesView.currentItem
-        val enabled = serviceStore.speedTestGroups.contains(groupNames[index])
-        val running = speedTestingIndex == index
+        val name = groupNames[index]
+        val enabled = serviceStore.speedTestGroups.contains(name)
+        val running = serviceStore.isSpeedTestRunning(name)
 
-        binding.speedTestView.imageTintList =
-            if (enabled)
-                ColorStateList.valueOf(
-                    context.resolveThemedColor(com.google.android.material.R.attr.colorSecondary)
+        // Three states, three colours: off is the toolbar's own neutral, on is
+        // the theme's accent, and measuring is green. Two shades of the same
+        // blue were indistinguishable on a television at three metres, which is
+        // what made a press look like it had done nothing.
+        binding.speedTestView.imageTintList = ColorStateList.valueOf(
+            when {
+                running -> ContextCompat.getColor(context, R.color.color_speed_test_running)
+                enabled -> context.resolveThemedColor(
+                    com.google.android.material.R.attr.colorSecondary
                 )
-            else
-                ColorStateList.valueOf(
-                    context.resolveThemedColor(com.google.android.material.R.attr.colorControlNormal)
+                else -> context.resolveThemedColor(
+                    com.google.android.material.R.attr.colorControlNormal
                 )
+            }
+        )
 
-        if (running) {
-            binding.speedTestView.visibility = View.GONE
-            binding.speedTestProgressView.visibility = View.VISIBLE
-        } else {
-            binding.speedTestView.visibility = View.VISIBLE
-            binding.speedTestProgressView.visibility = View.GONE
-        }
+        // The icon stays: a switch that turns into a bare spinner is a switch
+        // the reader can no longer recognise, and on a television it is the
+        // only thing on that button. The spinner is drawn behind it instead
+        // (see design_proxy.xml), so "measuring" reads as the same button
+        // still turning - and the same tap still ends it.
+        binding.speedTestView.visibility = View.VISIBLE
+        binding.speedTestProgressView.visibility = if (running) View.VISIBLE else View.GONE
     }
 
     private fun updateUrlTestButtonStatus() {

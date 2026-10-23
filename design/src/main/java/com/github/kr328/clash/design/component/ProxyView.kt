@@ -145,11 +145,22 @@ class ProxyView(
 
         val delayWidth = state.rect.width()
 
+        // A node the last round gave a figure to carries a green tick in the
+        // corner of its row. The text moves right to leave room for it: drawn
+        // over the title instead, the tick would sit on the first letters of
+        // the name, which is the one part of the row a reader looks for.
+        val badgeSize = if (state.hasSpeed) state.config.textSize else 0f
+        val badgeGap = if (state.hasSpeed) state.config.textSize * 0.25f else 0f
+        val textLeft = state.config.layoutPadding + state.config.contentPadding
+        val indentedLeft = textLeft + badgeSize + badgeGap
+
         val mainTextWidth = (width -
                 state.config.layoutPadding * 2 -
                 state.config.contentPadding * 2 -
                 delayWidth -
-                state.config.textMargin * 2
+                state.config.textMargin * 2 -
+                badgeSize -
+                badgeGap
                 )
             .coerceAtLeast(0f)
 
@@ -172,6 +183,11 @@ class ProxyView(
         // text draw measure
         val textOffset = (paint.descent() + paint.ascent()) / 2
 
+        val titleY = state.config.layoutPadding +
+                (height - state.config.layoutPadding * 2) / 3f - textOffset
+        val subtitleY = state.config.layoutPadding +
+                (height - state.config.layoutPadding * 2) / 3f * 2 - textOffset
+
         paint.reset()
 
         paint.textSize = state.config.textSize
@@ -187,21 +203,13 @@ class ProxyView(
         }
 
         // draw title
-        canvas.apply {
-            val x = state.config.layoutPadding + state.config.contentPadding
-            val y = state.config.layoutPadding +
-                    (height - state.config.layoutPadding * 2) / 3f - textOffset
-
-            drawText(state.title, 0, titleCount, x, y, paint)
-        }
+        canvas.drawText(state.title, 0, titleCount, indentedLeft, titleY, paint)
 
         // draw subtitle
-        canvas.apply {
-            val x = state.config.layoutPadding + state.config.contentPadding
-            val y = state.config.layoutPadding +
-                    (height - state.config.layoutPadding * 2) / 3f * 2 - textOffset
+        canvas.drawText(state.subtitle, 0, subtitleCount, indentedLeft, subtitleY, paint)
 
-            drawText(state.subtitle, 0, subtitleCount, x, y, paint)
+        if (state.hasSpeed) {
+            drawSpeedBadge(canvas, state, textLeft, titleY)
         }
 
         if (!isFocused)
@@ -211,6 +219,41 @@ class ProxyView(
         // merely moves focus would leave the screen looking untouched - the
         // click of the focus move is then the only sign anything happened.
         drawFocusRing(canvas, state)
+    }
+
+    /**
+     * Draws the green tick that marks a node the last round measured.
+     *
+     * A tick rather than a dot or a filled circle: the row already uses colour
+     * for the selection and prints the delay on the right, and a shape reads at
+     * television distance where a small dot disappears into the background.
+     * The stroke is proportional to the text so the mark scales with the
+     * layout instead of being sized for one of them.
+     */
+    private fun drawSpeedBadge(
+        canvas: Canvas,
+        state: ProxyViewState,
+        left: Float,
+        baseline: Float,
+    ) {
+        val size = state.config.textSize * 0.9f
+
+        val paint = state.paint
+
+        paint.reset()
+
+        paint.isAntiAlias = true
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = size * 0.17f
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeJoin = Paint.Join.ROUND
+        paint.color = SPEED_BADGE
+
+        val x = left + size * 0.12f
+        val y = baseline - size * 0.78f
+
+        canvas.drawLine(x, y + size * 0.36f, x + size * 0.26f, y + size * 0.62f, paint)
+        canvas.drawLine(x + size * 0.26f, y + size * 0.62f, x + size * 0.74f, y + size * 0.14f, paint)
     }
 
     private fun drawFocusRing(canvas: Canvas, state: ProxyViewState) {
@@ -246,5 +289,11 @@ class ProxyView(
         paint.color = state.controls
 
         canvas.drawRoundRect(inset, inset, right, bottom, radius, radius, paint)
+    }
+
+    private companion object {
+        // Green enough to read as "works" on both the light and the dark
+        // theme, and dark enough not to glare on a television.
+        const val SPEED_BADGE = 0xFF22C55E.toInt()
     }
 }

@@ -27,12 +27,6 @@ import java.util.concurrent.TimeUnit
 class SpeedTestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> {
-                scheduleNext(context)
-                scheduleWatch(context)
-            }
-
             Intents.ACTION_SPEEDTEST_REQUEST -> {
                 val redirect = intent.setComponent(SpeedTestWorker::class.componentName)
 
@@ -149,6 +143,27 @@ class SpeedTestReceiver : BroadcastReceiver() {
 
         fun cancelWatch(context: Context) {
             context.getSystemService<AlarmManager>()?.cancel(watchIntentOf(context))
+        }
+
+        /**
+         * Measures one group now, in :background.
+         *
+         * Called from the proxy screen's toolbar. The round runs in the worker
+         * rather than in the caller because the caller is a screen that can be
+         * closed: walking back to the group list used to cancel the round with
+         * the screen's coroutine, and the service is also where the live core
+         * the measurement needs actually lives.
+         *
+         * Not an alarm: this is one run asked for now, so there is nothing to
+         * re-arm. The worker serialises it with a periodic pass that is
+         * already in flight instead of measuring two groups at once.
+         */
+        fun requestGroup(context: Context, group: String) {
+            val intent = Intent(Intents.ACTION_SPEEDTEST_GROUP)
+                .setComponent(SpeedTestWorker::class.componentName)
+                .putExtra(Intents.EXTRA_GROUP, group)
+
+            context.startForegroundServiceCompat(intent)
         }
 
         private fun pendingIntentOf(context: Context): PendingIntent {

@@ -30,13 +30,20 @@ class ProxyPageAdapter(
         proxies: List<Proxy>,
         selectable: Boolean,
         parent: ProxyState,
-        links: Map<String, ProxyState>
+        links: Map<String, ProxyState>,
+        measured: Set<String> = emptySet(),
     ) {
         val states = withContext(Dispatchers.Default) {
             proxies.map {
                 val link = if (it.isGroup) links[it.name] else null
 
-                ProxyViewState(config, it, parent, link)
+                ProxyViewState(
+                    config,
+                    it,
+                    parent,
+                    link,
+                    hasSpeed = !it.isGroup && it.name in measured,
+                )
             }
         }
 

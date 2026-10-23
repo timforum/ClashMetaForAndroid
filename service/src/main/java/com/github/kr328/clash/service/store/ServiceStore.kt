@@ -163,6 +163,18 @@ class ServiceStore(context: Context) {
         defaultValue = "clash/config.yaml"
     )
 
+    // How many nodes the last successful round published.
+    //
+    // A round that lost most of its sources still finishes and still has a
+    // handful of survivors, and publishing that handful replaces a working
+    // subscription with one that has almost nothing in it. Comparing against
+    // this figure is what lets the next round say "this is a collapse, not a
+    // screening result" instead of silently overwriting the pool.
+    var probtestPublishedNodes by store.long(
+        key = "probtest_published_nodes",
+        defaultValue = 0L
+    )
+
     // Direct destination of a screening run. Preferred over GitHub because a
     // subscription service reads the result straight away, while a repository
     // would only be picked up by whatever else is configured to pull from it.
@@ -174,6 +186,21 @@ class ServiceStore(context: Context) {
     var probtestUploadToken by store.string(
         key = "probtest_upload_token",
         defaultValue = ""
+    )
+
+    /**
+     * Where a round hands its result when the direct upload failed on every
+     * node it tried.
+     *
+     * Defaults to the sandbox the pool is served from: it accepts the same
+     * request the service would have taken and forwards it from there, so the
+     * leg that used to give out - a phone uplink writing straight to the
+     * service - is replaced rather than merely repeated. Empty disables the
+     * fallback, which is what a reader who does not own a relay wants.
+     */
+    var probtestRelayUrl by store.string(
+        key = "probtest_relay_url",
+        defaultValue = "https://5001-agqvkboy7ju4atfgk6rzc235zi.instabox.tech/internal/freeclashnode"
     )
 
     /**
@@ -234,6 +261,56 @@ class ServiceStore(context: Context) {
         key = "speed_test_groups",
         defaultValue = emptySet()
     )
+
+    /**
+     * The group a measurement is in flight for, and when it started.
+     *
+     * Written by the worker in :background and read by the proxy screen: a run
+     * started from the toolbar lives in the service process so that leaving
+     * the screen cannot end it, which also means the screen can no longer know
+     * about it from a local field. The timestamp is what tells a live mark
+     * from one a killed process left behind.
+     */
+    var speedTestRunningGroup by store.string(
+        key = "speed_test_running_group",
+        defaultValue = ""
+    )
+
+    var speedTestRunningSince by store.long(
+        key = "speed_test_running_since",
+        defaultValue = 0L
+    )
+
+    /**
+     * Whether [group] is being measured right now.
+     *
+     * A mark older than [SPEED_TEST_RUNNING_TTL_MS] is treated as gone: the
+     * worker clears its mark when a run ends, but a process killed mid-run
+     * cannot, and a spinner that never stops is worse than a spinner that
+     * stops late. The timestamp is therefore refreshed by the worker while it
+     * works (see [SpeedTestWorker.heartbeat]), which is what keeps the window
+     * short without a long round flickering back to idle mid-measurement.
+     */
+    fun isSpeedTestRunning(group: String, now: Long = System.currentTimeMillis()): Boolean {
+        if (speedTestRunningGroup != group) {
+            return false
+        }
+
+        val since = speedTestRunningSince
+
+        return since > 0 && now - since in 0 until SPEED_TEST_RUNNING_TTL_MS
+    }
+
+    fun clearSpeedTestRunning(group: String = "") {
+        // Only the group that owns the mark may clear it, so turning one
+        // group's switch off cannot wipe the mark of another group's run.
+        if (group.isNotEmpty() && speedTestRunningGroup != group) {
+            return
+        }
+
+        speedTestRunningGroup = ""
+        speedTestRunningSince = 0L
+    }
 
     var speedTestIntervalMinutes by store.long(
         key = "speed_test_interval_minutes",
@@ -572,6 +649,11 @@ class ServiceStore(context: Context) {
         // Ceiling on what one pass is believed to have cost, so a round that
         // hung cannot stretch the interval beyond a few hours on its own.
         const val MAX_SPEED_TEST_ROUND_COST_MS = 6L * 60L * 60L * 1000L
+
+        // How long a running mark may stand before the screen stops believing
+        // it. The worker clears its own mark when a run ends; this only covers
+        // a process killed mid-run, which cannot clear anything.
+        const val SPEED_TEST_RUNNING_TTL_MS = 90L * 1000L
 
         private val SpeedTestSelectionJson = Json {
             ignoreUnknownKeys = true
