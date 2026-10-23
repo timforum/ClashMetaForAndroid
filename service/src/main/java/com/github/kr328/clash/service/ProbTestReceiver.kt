@@ -23,15 +23,10 @@ import java.util.concurrent.TimeUnit
  */
 class ProbTestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> scheduleNext(context)
+        if (intent.action == Intents.ACTION_PROBTEST_REQUEST) {
+            val redirect = intent.setComponent(ProbTestWorker::class.componentName)
 
-            Intents.ACTION_PROBTEST_REQUEST -> {
-                val redirect = intent.setComponent(ProbTestWorker::class.componentName)
-
-                context.startForegroundServiceCompat(redirect)
-            }
+            context.startForegroundServiceCompat(redirect)
         }
     }
 

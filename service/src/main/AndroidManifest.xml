@@ -85,10 +85,9 @@
             android:process=":background" />
 
         <receiver
-            android:name=".ProfileReceiver"
+            android:name=".ScheduleReceiver"
             android:enabled="true"
             android:exported="true"
-            android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
             android:process=":background">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -96,8 +95,16 @@
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".ProfileReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
+            android:process=":background">
             <intent-filter>
-                <action android:name="{applicationId}.intent.action.PROFILE_REQUEST_UPDATE" />
+                <action android:name="${applicationId}.intent.action.PROFILE_REQUEST_UPDATE" />
                 <data android:scheme="uuid" />
             </intent-filter>
         </receiver>
@@ -108,12 +115,6 @@
             android:exported="true"
             android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
             android:process=":background">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.TIME_SET" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-            </intent-filter>
             <intent-filter>
                 <action android:name="${applicationId}.intent.action.PROBTEST_REQUEST" />
             </intent-filter>
@@ -126,13 +127,10 @@
             android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
             android:process=":background">
             <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.TIME_SET" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="${applicationId}.intent.action.SPEEDTEST_REQUEST" />
             </intent-filter>
             <intent-filter>
-                <action android:name="${applicationId}.intent.action.SPEEDTEST_REQUEST" />
+                <action android:name="${applicationId}.intent.action.SPEEDTEST_WATCH" />
             </intent-filter>
         </receiver>
     </application>

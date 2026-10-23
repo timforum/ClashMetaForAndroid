@@ -36,9 +36,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Runs one candidate screening round in the background.
  *
- * The round lasts as long as three spaced rounds of probing, so the service has
- * to be a foreground service on every supported Android version; the alarm is
- * re-armed once the round finishes, including when it fails.
+ * The round lasts as long as the spaced rounds of probing it runs, so the
+ * service has to be a foreground service on every supported Android version;
+ * the alarm is re-armed once the round finishes, including when it fails.
  */
 class ProbTestWorker : BaseService() {
     private val jobs = mutableListOf<Job>()

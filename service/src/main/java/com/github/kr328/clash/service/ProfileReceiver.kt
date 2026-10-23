@@ -24,23 +24,10 @@ import java.util.concurrent.TimeUnit
 
 class ProfileReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> {
-                Global.launch {
-                    reset()
+        if (intent.action == Intents.ACTION_PROFILE_REQUEST_UPDATE) {
+            val redirect = intent.setComponent(ProfileWorker::class.componentName)
 
-                    val service = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
-                        .setComponent(ProfileWorker::class.componentName)
-
-                    context.startForegroundServiceCompat(service)
-                }
-            }
-            Intents.ACTION_PROFILE_REQUEST_UPDATE -> {
-                val redirect = intent.setComponent(ProfileWorker::class.componentName)
-
-                context.startForegroundServiceCompat(redirect)
-            }
+            context.startForegroundServiceCompat(redirect)
         }
     }
 
@@ -60,6 +47,21 @@ class ProfileReceiver : BroadcastReceiver() {
                 .mapNotNull { ImportedDao().queryByUUID(it) }
                 .filter { it.type != Profile.Type.File }
                 .forEach { scheduleNext(context, it) }
+        }
+
+        /**
+         * Re-arms every profile's update alarm, as after a reboot or an app
+         * update cleared them. [ScheduleReceiver] calls this.
+         */
+        fun scheduleAll(context: Context) {
+            Global.launch {
+                reset()
+
+                val service = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
+                    .setComponent(ProfileWorker::class.componentName)
+
+                context.startForegroundServiceCompat(service)
+            }
         }
 
         fun cancelNext(context: Context, imported: Imported) {
