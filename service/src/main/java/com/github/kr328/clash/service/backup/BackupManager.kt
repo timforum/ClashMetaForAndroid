@@ -1,7 +1,12 @@
 package com.github.kr328.clash.service.backup
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
+import androidx.core.content.getSystemService
 import com.github.kr328.clash.common.constants.Authorities
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.service.PreferenceProvider
@@ -29,6 +34,7 @@ import java.util.Base64
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -462,7 +468,8 @@ class BackupManager(private val context: Context) {
             // proxy the operation has no reason to depend on. Backing up
             // configurations is a maintenance task, not traffic that gains
             // anything from being tunneled, so the proxy is ignored outright
-            // rather than made optional.
+            // rather than made optional. Giving up the proxy is not the whole
+            // of leaving the tunnel: see offTunnel for the routing half.
             .proxy(Proxy.NO_PROXY)
             // Redirects are carried by hand below so the method and body of
             // PUT/PROPFIND survive them unchanged.
@@ -470,6 +477,142 @@ class BackupManager(private val context: Context) {
             .followSslRedirects(false)
             .build()
     }
+
+    /**
+     * Runs [action] with this process moved onto the network the tunnel sits
+     * on, so a request cannot be carried by the tunnel it is backing up.
+     *
+     * Backup and restore are the one network operation that must not depend on
+     * the tunnel, because the tunnel is what they exist to repair: the
+     * configuration that has stopped working is exactly what a restore fetches,
+     * and a request that first has to survive the broken exit it is trying to
+     * replace can never be answered when that exit is the broken part. It also
+     * puts a domestic WebDAV server behind whatever foreign node the current
+     * group happens to have picked, for no reason except that the kernel routed
+     * the request there.
+     *
+     * [Proxy.NO_PROXY] only gives up traffic that would have gone to an HTTP
+     * proxy: while the tunnel is up the system routes everything else into it
+     * as well, so the process has to be put back onto the physical network
+     * underneath. That moves the name resolution with it, which is the point -
+     * an address handed back by the tunnel's own resolver is picked by Clash
+     * and not by the network the request is about to leave on, so a request
+     * "sent direct" could still be answering to an address the tunnel chose
+     * and never reach.
+     *
+     * When no internet-bearing non-VPN network exists, which is what another
+     * app's VPN without `allowBypass` gives, there is nowhere below to go and
+     * the request goes through that tunnel after all. That is said out loud
+     * once per screen rather than left silent, because the failure the reader
+     * then sees belongs to somebody else's tunnel and not to the WebDAV server.
+     *
+     * The binding covers the whole process, which is safe here and nowhere
+     * else: the only network work this process does is backup traffic, while
+     * the core that serves the tunnel lives in the other process. A caller
+     * from inside `:background` would disturb that core, so it should leave
+     * the tunnel one socket at a time instead of one process at a time.
+     */
+    private fun <T> offTunnel(action: () -> T): T {
+        val connectivity = context.getSystemService<ConnectivityManager>()
+            ?: return throughTheTunnel(action)
+
+        // Putting a process onto a named network arrived in API 23. Below that
+        // there is nothing here able to leave the tunnel, so let the system
+        // route the request and say so.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return throughTheTunnel(action)
+
+        val network = underlyingNetwork(connectivity) ?: return throughTheTunnel(action)
+
+        // The bypass belongs to the whole process, so only one operation may
+        // hold it at a time: two WebDAV calls overlapping would let the
+        // second one's cleanup drop the first back into the tunnel halfway
+        // through its upload, and the bytes it then sends would take a route
+        // that nobody asked for.
+        bypassLock.lock()
+
+        try {
+            if (!runCatching { connectivity.bindProcessToNetwork(network) }.getOrDefault(false)) {
+                return throughTheTunnel(action)
+            }
+
+            report(bypass = true)
+
+            return try {
+                action()
+            } finally {
+                connectivity.bindProcessToNetwork(null)
+            }
+        } finally {
+            bypassLock.unlock()
+        }
+    }
+
+    /** Runs [action] with the tunnel left in place, and says why, once. */
+    private fun <T> throughTheTunnel(action: () -> T): T {
+        report(bypass = false)
+
+        return action()
+    }
+
+    /**
+     * The network to leave on: one with internet that is not the tunnel. A
+     * network the system has already proved can reach the internet beats one
+     * it has not, because that is the network the phone is really using, and
+     * unmetered beats metered so a backup does not spend mobile data that it
+     * does not need to.
+     */
+    private fun underlyingNetwork(connectivity: ConnectivityManager): Network? {
+        val networks = runCatching { connectivity.getAllNetworks() }.getOrElse { return null }
+
+        val usable = networks
+            .mapNotNull { network ->
+                runCatching { connectivity.getNetworkCapabilities(network) }
+                    .getOrNull()
+                    ?.let { network to it }
+            }
+            .filter { (_, capabilities) ->
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            }
+
+        return usable.maxByOrNull { (_, capabilities) ->
+            (if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) 2 else 0) +
+                (if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) 1 else 0)
+        }?.first
+    }
+
+    /** Says once per process whether the request could be put below the tunnel. */
+    private fun report(bypass: Boolean) {
+        if (reported) return
+        reported = true
+
+        if (bypass) {
+            Log.i("backup: webdav going direct, out of the interface the tunnel sits on")
+            return
+        }
+
+        Log.w(
+            "backup: no network below the tunnel has internet, so webdav has to go through the tunnel" +
+                " - another app's VPN without allowBypass is the usual reason"
+        )
+    }
+
+    /**
+     * One WebDAV exchange, taken out of the tunnel first.
+     *
+     * The bypass has to cover the exchange itself rather than the operation
+     * around it, because every redirect hop is resolved and connected inside:
+     * binding only the caller would leave the follow-up hops, and the name
+     * lookups that decide them, to whatever route the system happens to have.
+     * See [offTunnel] for why leaving the tunnel matters at all.
+     */
+    private fun execute(
+        url: String,
+        method: String,
+        target: WebdavTarget,
+        body: ByteArray? = null,
+        depth: String? = null,
+    ): DavResponse = offTunnel { exchange(url, method, target, body, depth) }
 
     /**
      * Sends one WebDAV request and carries it across up to five redirects.
@@ -482,7 +625,7 @@ class BackupManager(private val context: Context) {
      * that is exactly how an upload can report success while the server keeps
      * no file. The returned response must be closed by the caller.
      */
-    private fun execute(
+    private fun exchange(
         url: String,
         method: String,
         target: WebdavTarget,
@@ -773,6 +916,19 @@ class BackupManager(private val context: Context) {
     data class WebdavFile(val name: String, val size: Long)
 
     companion object {
+        // The bypass below the tunnel is a property of the process, not of the
+        // object that asked for it, so the lock that guards it has to be one
+        // for the whole process as well: two screens open on the same phone,
+        // or a second operation started while the first is still uploading,
+        // would otherwise let the newcomer's cleanup drop the older request
+        // back into the tunnel halfway through its body.
+        private val bypassLock = ReentrantLock()
+
+        // The reason a tunnel cannot be left belongs to the phone, not to the
+        // caller, so it gets said once for the process rather than once per
+        // screen.
+        private var reported = false
+
         private val PREFERENCE_FILES = listOf("service", "ui", "app", "tips")
 
         // The only preference file that is not owned by the process doing the
