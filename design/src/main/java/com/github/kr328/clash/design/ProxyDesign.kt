@@ -24,6 +24,7 @@ import com.github.kr328.clash.design.util.layoutInflater
 import com.github.kr328.clash.design.util.resolveThemedColor
 import com.github.kr328.clash.design.util.root
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.SpeedTestProfile
 import com.google.android.material.tabs.TabLayoutMediator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -84,6 +85,18 @@ class ProxyDesign(
         set(value) {
             adapter.states[binding.pagesView.currentItem].urlTesting = value
         }
+
+    /**
+     * Whether the page on screen is the group the YouTube rules point at.
+     *
+     * That group is ranked on speed rather than on delay - its own run proves
+     * YouTube playback with reachability probes and a real transfer, while
+     * generate_204 latency answers a question the routing of this group never
+     * asks - so the delay buttons stand down on it.
+     */
+    private val videoGroupVisible: Boolean
+        get() = groupNames.getOrNull(binding.pagesView.currentItem)
+            ?.let(SpeedTestProfile::isVideoGroup) == true
 
     override val root: View = binding.root
 
@@ -340,6 +353,12 @@ class ProxyDesign(
                         uiStore.proxyLastGroup = groupNames[position]
 
                         refreshSpeedTestButton()
+
+                        // The scroll-state callback only swings the delay
+                        // buttons after a swipe; a direct jump - like landing
+                        // straight on the video page - selects without one,
+                        // so the greyed-out state is applied here too.
+                        updateUrlTestButtonStatus()
                     }
                 })
             }
@@ -360,6 +379,12 @@ class ProxyDesign(
     }
 
     fun requestUrlTesting() {
+        // Greyed out on the video page, but a stale layout state can still land
+        // a press here: the request is dropped rather than sent, so latency
+        // cannot decide anything for a group whose standard is speed.
+        if (videoGroupVisible)
+            return
+
         urlTesting = true
 
         requests.trySend(Request.UrlTest(binding.pagesView.currentItem))
@@ -443,6 +468,25 @@ class ProxyDesign(
     }
 
     private fun updateUrlTestButtonStatus() {
+        // On the video page the delay buttons stand down: the toolbar icon
+        // stays visible but is greyed and dead, and the floating one hides
+        // itself, so the screen says the same thing whichever of the two a
+        // reader is used to pressing. A running test on a *previous* page keeps
+        // running; it simply has no place making a claim about this group.
+        if (videoGroupVisible) {
+            binding.urlTestView.isEnabled = false
+            binding.urlTestView.alpha = DISABLED_BUTTON_ALPHA
+            binding.urlTestView.visibility = View.VISIBLE
+            binding.urlTestProgressView.visibility = View.GONE
+
+            binding.urlTestFloatView.hide()
+
+            return
+        }
+
+        binding.urlTestView.isEnabled = true
+        binding.urlTestView.alpha = 1f
+
         if (verticalBottomScrolled || horizontalScrolling || urlTesting) {
             binding.urlTestFloatView.hide()
         } else {
@@ -456,5 +500,10 @@ class ProxyDesign(
             binding.urlTestView.visibility = View.VISIBLE
             binding.urlTestProgressView.visibility = View.GONE
         }
+    }
+
+    companion object {
+        /** How faint the delay button reads while it is unusable on the video page. */
+        private const val DISABLED_BUTTON_ALPHA = 0.4f
     }
 }
