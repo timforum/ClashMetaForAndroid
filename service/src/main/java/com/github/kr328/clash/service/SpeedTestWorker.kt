@@ -295,9 +295,11 @@ class SpeedTestWorker : BaseService() {
     /**
      * Applies the running measurement's improving best to the connection while
      * the round is still running, so the switch never waits for the group to
-     * finish: the first node that clears [AUTO_SWITCH_FLOOR_MBPS] takes the
-     * connection immediately, and a later, faster node replaces it - the
-     * fastest one still wins, only sooner than the ranking at the end.
+     * finish. The core measures the node in use first, so the bar everything
+     * is judged by is the speed the reader is riding right now, and a later
+     * node takes the connection only when it is strictly faster than the best
+     * figure seen so far - the fastest one still wins, only sooner than the
+     * ranking at the end.
      *
      * The patch is made on this side of a channel rather than inside the
      * callback: the callback is hosted by the run itself, and calling back
@@ -309,13 +311,13 @@ class SpeedTestWorker : BaseService() {
         group: String,
         early: Channel<SpeedTestProgress>,
     ): Job = launch {
-        var switchedMbps = 0.0
+        var bestMbps = 0.0
 
         for (progress in early) {
             val name = progress.best ?: continue
             val mbps = progress.bestMbps
 
-            if (name.isEmpty() || mbps < AUTO_SWITCH_FLOOR_MBPS || mbps <= switchedMbps)
+            if (name.isEmpty() || mbps <= bestMbps)
                 continue
 
             // Turned off during the run: the figures may stay, the
@@ -331,9 +333,16 @@ class SpeedTestWorker : BaseService() {
                 { from, to -> Clash.patchSelector(from, to) },
             ).orEmpty()
 
-            if (moved.isNotEmpty()) {
-                switchedMbps = mbps
+            // The figure is adopted whether or not anything moved: the first
+            // event is usually the node in use itself, which is already
+            // routed and leaves the patch nothing to do, but its speed is
+            // still the bar every later node is judged against. Without
+            // adopting it the run would take the next passer whatever it
+            // measured instead of demanding strictly more than the reader
+            // already has.
+            bestMbps = mbps
 
+            if (moved.isNotEmpty()) {
                 Log.d(
                     "speedtest: $group: switched early to '$name' at " +
                         "${"%.1f".format(mbps)}Mbps via ${moved.joinToString(" -> ")}"
@@ -360,7 +369,6 @@ class SpeedTestWorker : BaseService() {
         val early = Channel<SpeedTestProgress>(Channel.CONFLATED)
 
         val switcher = bubbleSwitcher(store, group, early)
-
         // The video group proves YouTube playback; every other group only
         // needs latency plus a generic transfer, so the YouTube probes are
         // left out of its run rather than spending traffic on them.
@@ -1327,15 +1335,6 @@ class SpeedTestWorker : BaseService() {
         // other process needs to be able to tell a live round from one whose
         // worker was killed.
         private const val HEARTBEAT_INTERVAL_MS = 20L * 1000L
-
-        // The floor a node has to clear before a run in progress moves the
-        // connection onto it early: 1 MB/s, the unit readers quote, which is
-        // eight megabits - the unit the screen prints. Below this a node is
-        // alive but not worth interrupting the run for. A toolbar run takes
-        // the first candidate over the floor because the old node stopped
-        // carrying; the video group's periodic pass takes it because its
-        // standard is speed and the reader is mid-playback.
-        private const val AUTO_SWITCH_FLOOR_MBPS = 8.0
     }
 
     override fun onBind(intent: Intent?): IBinder {

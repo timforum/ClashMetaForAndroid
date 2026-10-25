@@ -184,6 +184,25 @@ func speedTestGroup(callback unsafe.Pointer, group, options C.c_string) (out *C.
 		})
 	}
 
+	// The node the reader is riding measures first. Its figure is the
+	// baseline every later node is compared against: a runner that switches
+	// onto the moving best needs to know what "better" means before any
+	// other node can finish, and with the member order as it stood that
+	// answer could arrive after the run had already decided. It also starts
+	// the wave, so a run whose reason is "the current node stopped" learns
+	// that verdict before anything else is spent on it.
+	if inUse := tunnel.InUseNode(name); inUse != "" {
+		for i := range nodes {
+			if nodes[i].Name != inUse || i == 0 {
+				continue
+			}
+			first := nodes[i]
+			copy(nodes[1:i+1], nodes[:i])
+			nodes[0] = first
+			break
+		}
+	}
+
 	results := probtest.GroupSpeedTest(
 		context.Background(),
 		name,
