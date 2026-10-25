@@ -419,6 +419,10 @@
     <string name="probtest_speed_interval_effective_unknown">Not measured yet, so the value above is used as typed.</string>
     <string name="probtest_watch_interval">In-use node watch interval (minutes)</string>
     <string name="probtest_watch_interval_summary">How often the node each toggled group is connected through is re-checked, at least 1</string>
+    <string name="probtest_video_interval">Video group fast pass interval (minutes)</string>
+    <string name="probtest_video_interval_summary">How often the video group re-measures a short list, at least 5</string>
+    <string name="probtest_video_round_size">Video group fast pass list size</string>
+    <string name="probtest_video_round_size_summary">The node in use plus this many of the best measured, one round, transfer capped per node</string>
     <string name="probtest_interval">Interval in minutes</string>
     <string name="probtest_interval_summary">30</string>
     <string name="probtest_round_gap">Seconds between rounds</string>

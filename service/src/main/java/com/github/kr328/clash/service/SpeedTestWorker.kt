@@ -155,6 +155,19 @@ class SpeedTestWorker : BaseService() {
             jobs.add(launch { runFromToolbar(group) })
         } else if (intent?.action == Intents.ACTION_SPEEDTEST_WATCH) {
             jobs.add(launch { watch() })
+        } else if (intent?.action == Intents.ACTION_SPEEDTEST_VIDEO) {
+            val group = intent.getStringExtra(Intents.EXTRA_GROUP).orEmpty()
+
+            if (group.isEmpty()) {
+                Log.d("speedtest: a fast pass arrived without a group")
+
+                return START_NOT_STICKY
+            }
+
+            // The fast pass is a handful of names, so a queue behind a round
+            // in flight costs little; dropping it would leave the ranking
+            // stale until the next window anyway.
+            jobs.add(launch { runFromVideoAlarm(group) })
         }
 
         return START_NOT_STICKY
@@ -290,6 +303,120 @@ class SpeedTestWorker : BaseService() {
 
             clearRunning(store, group)
         }
+    }
+
+    /**
+     * Runs the video group's fast pass for the alarm that asked for it, and
+     * re-arms that alarm whatever the answer was.
+     *
+     * Same ceremony as the toolbar's round - one mark, one heartbeat, the
+     * shared lock - because it is a second alarm arriving at its own rhythm
+     * into a service that must never measure two things at once. The pass
+     * itself is small, so a queue behind a full round costs little.
+     */
+    private suspend fun runFromVideoAlarm(group: String) {
+        val store = ServiceStore(applicationContext)
+
+        if (group in store.speedTestGroups) {
+            markRunning(store, group)
+        }
+
+        val beat = heartbeat(store, group)
+
+        try {
+            runLock.withLock {
+                if (group !in store.speedTestGroups) {
+                    clearRunning(store, group)
+
+                    Log.d("speedtest: $group: the switch is off, the fast pass is dropped")
+
+                    return@withLock
+                }
+
+                markRunning(store, group)
+
+                var ok = false
+
+                try {
+                    ok = runVideoFastRound(store, group)
+                } catch (e: Throwable) {
+                    // Same jaw as the other callers: a LinkageError escaping
+                    // here would take the core's whole process down.
+                    Log.w("speedtest: $group fast pass failed", e)
+                } finally {
+                    clearRunning(store, group)
+
+                    SpeedTestReceiver.scheduleVideo(this)
+
+                    sendSpeedTestGroupFinished(group, ok)
+                }
+            }
+        } finally {
+            beat.cancel()
+
+            clearRunning(store, group)
+        }
+    }
+
+    /**
+     * One fast pass of the video group: delay first, then the short list.
+     *
+     * The list is the node in use plus the best handful the last rounds
+     * scored - ranked on the throughput figure each one carries, because
+     * that group is ranked on speed. Candidates nothing has measured yet
+     * come behind them, ordered by the delay the core's history holds: a
+     * node with a delay figure is a node that answered, and the quickest
+     * answer is the next most promising exit to try. A node with neither a
+     * figure nor a delay is left for the hourly full round to wake up.
+     *
+     * Every name on the list runs the full gate - the latency probe first,
+     * which is where "only delays with data" is enforced: a node that does
+     * not answer loses its throughput attempt before a byte of it is spent.
+     * One round, and a small transfer cap per node, keep the whole pass a
+     * fraction of what the hourly round costs.
+     *
+     * Returns through [screen], so the same bubble switcher, result recording
+     * and speed-ranked closing move apply as in every other run.
+     */
+    private suspend fun runVideoFastRound(store: ServiceStore, group: String): Boolean {
+        val info = Clash.queryGroup(group, ProxySort.Default)
+        val current = info.inUse.ifEmpty { info.now }
+        val members = info.proxies.filter { !it.isGroup && it.name.isNotBlank() }
+        val measured = store.speedTestResults().mbps
+
+        val size = store.speedTestVideoRoundSize.coerceIn(3L, 30L).toInt()
+        val ranked = members
+            .filter { it.name != current && (measured[it.name] ?: 0.0) > 0.0 }
+            .sortedByDescending { measured[it.name] ?: 0.0 }
+            .map { it.name }
+        // Nobody has scored them yet, but their delay history says they
+        // answered at some point - the quickest answer is tried first.
+        val answered = members
+            .filter { it.name != current && it.delay > 0 && measured[it.name] == null }
+            .sortedBy { it.delay }
+            .map { it.name }
+
+        val pick = (
+            ranked.asSequence() + answered.asSequence()
+            ).distinct().take(size).toList()
+
+        val shortList = listOfNotNull(current.ifEmpty { null }) + pick
+
+        if (shortList.isEmpty()) {
+            Log.d("speedtest: $group: the fast pass has no list to measure")
+
+            return false
+        }
+
+        Log.d("speedtest: $group: fast pass over ${shortList.size} nodes")
+
+        return screen(
+            store,
+            group,
+            rounds = 1,
+            pick = shortList,
+            maxBytes = FAST_ROUND_MAX_BYTES,
+        )
     }
 
     /**
@@ -1042,7 +1169,14 @@ class SpeedTestWorker : BaseService() {
      * user about the failover. [avoid] names a node that must not be picked
      * even though it passed, which is how the watch keeps a node it just
      * switched away from from being chosen again the next moment.
-     */    private suspend fun screen(store: ServiceStore, group: String, avoid: String = ""): Boolean {
+     */    private suspend fun screen(
+        store: ServiceStore,
+        group: String,
+        avoid: String = "",
+        rounds: Int = 2,
+        pick: List<String> = emptyList(),
+        maxBytes: Long = 0,
+    ): Boolean {
         // Two rounds: a single lucky transfer must not decide which node the
         // whole app connects through when nobody is watching. The worst round
         // is the score, so the ranking needs both rounds to hold up.
@@ -1058,8 +1192,15 @@ class SpeedTestWorker : BaseService() {
         val switcher =
             if (SpeedTestProfile.isVideoGroup(group)) bubbleSwitcher(store, group, early) else null
 
+        // The group profile decides the gate itself; the fast pass narrows
+        // the roster to its short list and caps every transfer on it, so a
+        // five-minute rhythm costs a fraction of the full round.
+        val options = SpeedTestProfile.options(group, rounds)
+            .let { if (pick.isEmpty()) it else it.copy(pick = pick) }
+            .let { if (maxBytes > 0) it.copy(maxBytes = maxBytes) else it }
+
         val envelope = try {
-            Clash.speedTestGroup(group, SpeedTestProfile.options(group, rounds = 2)) {
+            Clash.speedTestGroup(group, options) {
                 early.trySend(it)
             }
         } finally {
@@ -1335,6 +1476,13 @@ class SpeedTestWorker : BaseService() {
         // other process needs to be able to tell a live round from one whose
         // worker was killed.
         private const val HEARTBEAT_INTERVAL_MS = 20L * 1000L
+
+        // The transfer cap of one video fast pass per node: the watch probe's
+        // own budget. The five-minute rhythm is what makes this small - a full
+        // gate on a wide list is the hourly round's job, and a quarter
+        // megabyte is enough to tell a living exit from one that answers
+        // probes but carries nothing.
+        private const val FAST_ROUND_MAX_BYTES = 256L * 1024L
     }
 
     override fun onBind(intent: Intent?): IBinder {

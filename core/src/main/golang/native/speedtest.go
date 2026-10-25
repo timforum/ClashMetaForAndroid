@@ -53,6 +53,15 @@ type groupSpeedRequest struct {
 	// still answers and still carries, at the cost of measuring one node
 	// instead of the whole group.
 	Only string `json:"only,omitempty"`
+	// Pick narrows the run to a set of named nodes, a short list measured
+	// in full - latency gate, reachability, throughput. The video group's
+	// fast pass submits the node in use plus the best rosters it knows, so
+	// five minutes of rhythm answers "is the best exit still the best"
+	// without spending the whole group's budget again; the hourly round
+	// remains what refreshes the long tail. Only the named nodes are
+	// measured, in the order given, and a name that is not a member costs
+	// nothing.
+	Pick []string `json:"pick,omitempty"`
 	// SkipReachability drops the YouTube probes from the measurement,
 	// leaving latency plus throughput.
 	SkipReachability bool `json:"skipReachability,omitempty"`
@@ -163,6 +172,33 @@ func speedTestGroup(callback unsafe.Pointer, group, options C.c_string) (out *C.
 				OK:    false,
 				Group: name,
 				Error: fmt.Sprintf("node `%s` is not a measurable member of `%s`", req.Only, name),
+			})
+		}
+		targets = kept
+	}
+
+	// A fast pass names its short list: every node named is measured whole -
+	// latency first, then the reachability probes, then the timed transfer -
+	// and nothing outside the list is touched. Unknown names simply do not
+	// carry their share of the list, which keeps a roster captured before a
+	// profile change harmless.
+	if len(req.Pick) > 0 {
+		byName := make(map[string]tunnel.SpeedTarget, len(targets))
+		for _, t := range targets {
+			byName[t.Name] = t
+		}
+
+		kept := make([]tunnel.SpeedTarget, 0, len(req.Pick))
+		for _, n := range req.Pick {
+			if t, ok := byName[n]; ok && n != "" {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			return marshalJson(speedTestEnvelope{
+				OK:    false,
+				Group: name,
+				Error: "none of the picked nodes is a measurable member of the group",
 			})
 		}
 		targets = kept

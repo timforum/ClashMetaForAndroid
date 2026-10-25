@@ -63,6 +63,24 @@ class ProbTestIntervalsDesign(
                 placeholder = R.string.probtest_watch_interval_summary,
                 card = true,
             )
+
+            editableText(
+                value = srvStore::speedTestVideoIntervalMinutes,
+                adapter = NullableTextAdapter.Number,
+                title = R.string.probtest_video_interval,
+                icon = R.drawable.ic_baseline_speed,
+                placeholder = R.string.probtest_video_interval_summary,
+                card = true,
+            )
+
+            editableText(
+                value = srvStore::speedTestVideoRoundSize,
+                adapter = NullableTextAdapter.Number,
+                title = R.string.probtest_video_round_size,
+                icon = R.drawable.ic_baseline_sync,
+                placeholder = R.string.probtest_video_round_size_summary,
+                card = true,
+            )
         }
 
         // The speed interval is not the number that runs, so the number that

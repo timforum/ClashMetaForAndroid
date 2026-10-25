@@ -47,6 +47,14 @@ data class SpeedTestOptions(
      */
     @SerialName("only") val only: String = "",
     /**
+     * Narrows a run to a named short list, measured in full and in the order
+     * given. The video group's fast pass submits the node in use plus the
+     * best handful it knows of, so a five-minute rhythm answers "is the best
+     * exit still the best" without restarting the whole group's round; the
+     * hourly round stays what keeps the ranking of the long tail fresh.
+     */
+    @SerialName("pick") val pick: List<String> = emptyList(),
+    /**
      * Drops the YouTube reachability probes from one measurement, leaving
      * latency plus throughput. The watch re-measures often: re-fetching
      * those pages every pass would spend more traffic on the check than

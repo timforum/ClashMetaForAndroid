@@ -31,6 +31,7 @@ class ScheduleReceiver : BroadcastReceiver() {
                 ProbTestReceiver.scheduleNext(context)
                 SpeedTestReceiver.scheduleNext(context)
                 SpeedTestReceiver.scheduleWatch(context)
+                SpeedTestReceiver.scheduleVideo(context)
             }
         }
     }

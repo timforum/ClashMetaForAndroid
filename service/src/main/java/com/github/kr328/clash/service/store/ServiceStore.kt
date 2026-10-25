@@ -473,6 +473,32 @@ class ServiceStore(context: Context) {
     )
 
     /**
+     * How often the video group's fast pass re-runs its short list.
+     *
+     * The pass is deliberately cheap (a handful of names, one round, a small
+     * throughput cap each), so its rhythm can sit far tighter than the full
+     * hourly round it rides beside. Five minutes is the floor and the
+     * default: an inexact alarm already drifts a couple of minutes per
+     * window, and below that the pass would spend the hour chasing itself.
+     */
+    var speedTestVideoIntervalMinutes by store.long(
+        key = "speed_test_video_interval_minutes",
+        defaultValue = 5L
+    )
+
+    /**
+     * How wide the video group's fast pass is: the node in use plus this
+     * many of the best measured. The short list is what keeps a five-minute
+     * rhythm cheap - a name costs a latency probe at the least, a capped
+     * transfer at the most - and the hourly full round remains what re-ranks
+     * the long tail the list never looks at.
+     */
+    var speedTestVideoRoundSize by store.long(
+        key = "speed_test_video_round_size",
+        defaultValue = 10L
+    )
+
+    /**
      * The enabled groups the last pass did not find in the running
      * configuration, kept so a second pass can confirm they are really gone.
      *

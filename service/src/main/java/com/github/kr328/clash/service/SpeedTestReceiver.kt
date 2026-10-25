@@ -12,6 +12,7 @@ import com.github.kr328.clash.common.constants.Intents
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.common.util.componentName
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.SpeedTestProfile
 import java.util.concurrent.TimeUnit
 
 /**
@@ -35,6 +36,25 @@ class SpeedTestReceiver : BroadcastReceiver() {
 
             Intents.ACTION_SPEEDTEST_WATCH -> {
                 val redirect = intent.setComponent(SpeedTestWorker::class.componentName)
+
+                context.startForegroundServiceCompat(redirect)
+            }
+
+            Intents.ACTION_SPEEDTEST_VIDEO -> {
+                // The alarm intent carries no group: the roster may have
+                // changed while the alarm sat, so the name is re-read here
+                // rather than frozen into the pending intent at arm time.
+                val group = ServiceStore(context).speedTestGroups
+                    .firstOrNull(SpeedTestProfile::isVideoGroup)
+
+                if (group == null) {
+                    Log.d("speedtest: no video group enabled, the fast pass is dropped")
+
+                    return
+                }
+
+                val redirect = intent.setComponent(SpeedTestWorker::class.componentName)
+                    .putExtra(Intents.EXTRA_GROUP, group)
 
                 context.startForegroundServiceCompat(redirect)
             }
@@ -146,6 +166,44 @@ class SpeedTestReceiver : BroadcastReceiver() {
         }
 
         /**
+         * Arms the video group's fast pass, or cancels it when no video group
+         * is enabled any more.
+         *
+         * A third alarm rather than a branch of the existing two: the full
+         * round answers "is every node of every group still worth ranking"
+         * and the watch answers "is the current exit alive", but neither is
+         * built to run a short, capped list every few minutes against one
+         * group. The interval is cheap by construction - a handful of names,
+         * one round, a small transfer cap each - so the minimum sits well
+         * under the full round's own floor.
+         */
+        fun scheduleVideo(context: Context) {
+            val intent = videoIntentOf(context)
+            val alarm = context.getSystemService<AlarmManager>() ?: return
+
+            alarm.cancel(intent)
+
+            val store = ServiceStore(context)
+
+            if (store.speedTestGroups.none(SpeedTestProfile::isVideoGroup)) {
+                Log.d("speedtest: no video group enabled, no fast pass scheduled")
+
+                return
+            }
+
+            val delay =
+                TimeUnit.MINUTES.toMillis(store.speedTestVideoIntervalMinutes.coerceAtLeast(5))
+
+            Log.d("speedtest: next video fast pass in ${delay / 60000} minutes")
+
+            alarm.set(AlarmManager.RTC, System.currentTimeMillis() + delay, intent)
+        }
+
+        fun cancelVideo(context: Context) {
+            context.getSystemService<AlarmManager>()?.cancel(videoIntentOf(context))
+        }
+
+        /**
          * Measures one group now, in :background.
          *
          * Called from the proxy screen's toolbar. The round runs in the worker
@@ -184,7 +242,19 @@ class SpeedTestReceiver : BroadcastReceiver() {
 
             return PendingIntent.getBroadcast(
                 context,
-                0,
+                1,
+                intent,
+                pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
+            )
+        }
+
+        private fun videoIntentOf(context: Context): PendingIntent {
+            val intent = Intent(Intents.ACTION_SPEEDTEST_VIDEO)
+                .setComponent(SpeedTestReceiver::class.componentName)
+
+            return PendingIntent.getBroadcast(
+                context,
+                2,
                 intent,
                 pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
             )

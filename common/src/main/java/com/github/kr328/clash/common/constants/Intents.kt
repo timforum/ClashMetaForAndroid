@@ -32,6 +32,8 @@ object Intents {
     // One group asked for by the toolbar: measured in :background rather than
     // by the screen that asked, so leaving the screen cannot end it.
     val ACTION_SPEEDTEST_GROUP = "$packageName.intent.action.SPEEDTEST_GROUP"
+
+    val ACTION_SPEEDTEST_VIDEO = "$packageName.intent.action.SPEEDTEST_VIDEO"
     val ACTION_SPEEDTEST_RUNNING_CHANGED =
         "$packageName.intent.action.SPEEDTEST_RUNNING_CHANGED"
     val ACTION_SPEEDTEST_GROUP_FINISHED =
