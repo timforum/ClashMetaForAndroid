@@ -200,9 +200,23 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
                                     SpeedTestReceiver.cancelNext(this@ProxyActivity)
                                     SpeedTestReceiver.cancelWatch(this@ProxyActivity)
+
+                                    // The fast pass belongs to the video group
+                                    // alone, so switching it off takes its
+                                    // alarm down with it instead of leaving a
+                                    // broadcast that would arrive, find no
+                                    // video group and die without re-arming.
+                                    SpeedTestReceiver.cancelVideo(this@ProxyActivity)
                                 } else {
                                     SpeedTestReceiver.scheduleNext(this@ProxyActivity)
                                     SpeedTestReceiver.scheduleWatch(this@ProxyActivity)
+                                    // Re-evaluated rather than cancelled: if
+                                    // the group just switched off was not the
+                                    // video group, the call re-arms the same
+                                    // window; if it was, the call discovers
+                                    // there is nothing left to schedule and
+                                    // takes the alarm down.
+                                    SpeedTestReceiver.scheduleVideo(this@ProxyActivity)
                                 }
                             }
                         }

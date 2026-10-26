@@ -294,6 +294,13 @@ class SpeedTestWorker : BaseService() {
 
                     SpeedTestReceiver.scheduleNext(this)
                     SpeedTestReceiver.scheduleWatch(this)
+                    // The fast pass of the video group rides the same cram: a
+                    // round kicked off from the toolbar is also what arms its
+                    // first five-minute alarm, because nothing else fires
+                    // between the toggle and here. The call re-checks the
+                    // toggle itself and cancels instead when no video group is
+                    // on, so groups that are not the video group leave it be.
+                    SpeedTestReceiver.scheduleVideo(this)
 
                     sendSpeedTestGroupFinished(group, ok)
                 }
