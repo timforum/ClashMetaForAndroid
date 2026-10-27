@@ -132,7 +132,7 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
                                 design.updateGroup(
                                     it.index,
-                                    pinSelectorMembers(groupName, group.proxies),
+                                    pinSelectorMembers(group.proxies),
                                     group.type == "Selector",
                                     state,
                                     unorderedStates
@@ -274,7 +274,12 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
      */
     private fun pinnedGroupOrder(names: List<String>): List<String> {
         val rules: List<(String) -> Boolean> = listOf(
-            { n -> n.contains("节点选择", true) },
+            {
+                n ->
+                n.contains("节点选择", true)
+                    || n.contains("手动切换", true)
+                    || n.contains("手动选择", true)
+            },
             { n -> n.contains("自动选择", true) || n.contains("auto", true) },
             { n -> n.contains("故障转移", true) || n.contains("fallback", true) },
             { n -> n.contains("负载均衡", true) || n.contains("loadbalance", true) },
@@ -302,32 +307,43 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
      * Pins the steering groups to the top of the proxy selector's member list.
      *
      * The groups a subscriber picks between when steering traffic by hand —
-     * auto, fallback, load-balance, YouTube — are members of the proxy
-     * selector like any node, but they mean infrastructure rather than a
-     * country, and they sit wherever the subscription listed them among
-     * hundreds of flags. Turning the selector's page therefore means scrolling
-     * to find the one row that switches every page at once. They are pinned
-     * to the top in the declared order, and the remaining members follow in
-     * whatever order the query left them (the reader's own sort choice
-     * applied), unrecognised names untouched.
+     * the proxy selector opens on every subscription in the same four — auto,
+     * fallback, load-balance, YouTube — are members of the selection page
+     * like any node, but they mean infrastructure rather than a country, and
+     * they sit wherever the subscription listed them among hundreds of flags.
+     * Opening the selector page therefore means scrolling to find the one row
+     * that switches every other page at once. They are pinned to the top in
+     * the declared order, and the remaining members follow in whatever order
+     * the query left them (the reader's own sort choice applied),
+     * unrecognised names untouched.
      *
-     * Only the proxy selector's page behaves this way: other groups have no
-     * such members to lift, and a server whose address happens to contain a
-     * marker must not be pinned by accident — the two-part test (it is a
-     * group, and its name matches) is what keeps a node out. A name is
-     * claimed by the first rule that fits, so a member matching two rules is
-     * pinned once at the higher slot. The video marker is [SpeedTestProfile]'s
-     * own, so the row that turns the video group and the group the fast pass
-     * steers stay one thing.
+     * Every group's member list is treated alike rather than only the
+     * selection: subscriptions name that page differently — 节点选择 here,
+     * 手动切换 or plain PROXY elsewhere — and keying on a name is what let
+     * half the subscriptions keep their steering rows buried. The list is
+     * harmless where the members are all nodes: the two-part test (it is a
+     * group, and its name matches) pins nothing in a group that carries no
+     * sub-groups, so a server whose address happens to say auto or youtube
+     * keeps its place still. A name is claimed by the first rule that fits,
+     * so a member matching two rules is pinned once at the higher slot. The
+     * video marker is [SpeedTestProfile]'s own, so the row that turns the
+     * video group and the group the fast pass steers stay one thing.
      */
-    private fun pinSelectorMembers(groupName: String, proxies: List<Proxy>): List<Proxy> {
-        if (!groupName.contains("节点选择", true))
-            return proxies
-
+    private fun pinSelectorMembers(proxies: List<Proxy>): List<Proxy> {
         val rules: List<(String) -> Boolean> = listOf(
             { n -> n.contains("自动选择", true) || n.contains("auto", true) },
-            { n -> n.contains("故障转移", true) || n.contains("fallback", true) },
-            { n -> n.contains("负载均衡", true) || n.contains("loadbalance", true) },
+            { n ->
+                n.contains("故障转移", true)
+                    || n.contains("故障切换", true)
+                    || n.contains("fallback", true)
+            },
+            { n ->
+                n.contains("负载均衡", true)
+                    || n.contains("负荷均衡", true)
+                    || n.contains("loadbalance", true)
+                    || n.contains("load balance", true)
+                    || n.contains("load-balance", true)
+            },
             SpeedTestProfile::isVideoGroup,
         )
 
