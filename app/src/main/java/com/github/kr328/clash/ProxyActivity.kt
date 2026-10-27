@@ -3,6 +3,7 @@ package com.github.kr328.clash
 import android.view.KeyEvent
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
+import com.github.kr328.clash.core.model.Proxy
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
@@ -119,9 +120,10 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                         }
                         is ProxyDesign.Request.Reload -> {
                             launch {
+                                val groupName = names[it.index]
                                 val group = reloadLock.withPermit {
                                     withClash {
-                                        queryProxyGroup(names[it.index], uiStore.proxySort)
+                                        queryProxyGroup(groupName, uiStore.proxySort)
                                     }
                                 }
                                 val state = states[it.index]
@@ -130,7 +132,7 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
                                 design.updateGroup(
                                     it.index,
-                                    group.proxies,
+                                    pinSelectorMembers(groupName, group.proxies),
                                     group.type == "Selector",
                                     state,
                                     unorderedStates
@@ -253,24 +255,26 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
     /**
      * Pins the steering groups to the front of the tab strip.
      *
-     * Auto, fallback and load-balance decide where traffic actually goes, and
-     * the video group is the one watched ten seconds at a time, so all four
-     * belong within a thumb's reach no matter where the subscription happened
-     * to list them. They are pinned in the declared order — auto, fallback,
-     * load-balance, YouTube — with every other group following right behind in
-     * its original order, untouched: re-sorting what the profile author
-     * arranged would only make the strip jump between profile updates.
+     * The proxy selector, auto, fallback and load-balance decide where traffic
+     * actually goes, and the video group is the one watched ten seconds at a
+     * time, so all five belong within a thumb's reach no matter where the
+     * subscription happened to list them. They are pinned in the declared
+     * order — the proxy selector, auto, fallback, load-balance, YouTube — with
+     * every other group following right behind in its original order,
+     * untouched: re-sorting what the profile author arranged would only make
+     * the strip jump between profile updates.
      *
      * A name is claimed by the first rule that fits, so a group matching two
      * rules is pinned once at the higher slot and never rescued by the lower.
      * Both languages are matched because the same profile can arrive with
-     * either: 自动选择 and auto name the same idea, as do 故障转移/fallback and
-     * 负载均衡/loadbalance. The video group reuses [SpeedTestProfile]'s own
+     * either: 节点选择/自动选择/故障转移/负载均衡 and auto/fallback/loadbalance
+     * name the same ideas. The video group reuses [SpeedTestProfile]'s own
      * marker so the tab the fast pass steers and the tab this pins stay one
      * thing rather than drifting apart.
      */
     private fun pinnedGroupOrder(names: List<String>): List<String> {
         val rules: List<(String) -> Boolean> = listOf(
+            { n -> n.contains("节点选择", true) },
             { n -> n.contains("自动选择", true) || n.contains("auto", true) },
             { n -> n.contains("故障转移", true) || n.contains("fallback", true) },
             { n -> n.contains("负载均衡", true) || n.contains("loadbalance", true) },
@@ -289,6 +293,63 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
             }
 
             rest.add(name)
+        }
+
+        return pinned.flatten() + rest
+    }
+
+    /**
+     * Pins the steering groups to the top of the proxy selector's member list.
+     *
+     * The groups a subscriber picks between when steering traffic by hand —
+     * auto, fallback, load-balance, YouTube — are members of the proxy
+     * selector like any node, but they mean infrastructure rather than a
+     * country, and they sit wherever the subscription listed them among
+     * hundreds of flags. Turning the selector's page therefore means scrolling
+     * to find the one row that switches every page at once. They are pinned
+     * to the top in the declared order, and the remaining members follow in
+     * whatever order the query left them (the reader's own sort choice
+     * applied), unrecognised names untouched.
+     *
+     * Only the proxy selector's page behaves this way: other groups have no
+     * such members to lift, and a server whose address happens to contain a
+     * marker must not be pinned by accident — the two-part test (it is a
+     * group, and its name matches) is what keeps a node out. A name is
+     * claimed by the first rule that fits, so a member matching two rules is
+     * pinned once at the higher slot. The video marker is [SpeedTestProfile]'s
+     * own, so the row that turns the video group and the group the fast pass
+     * steers stay one thing.
+     */
+    private fun pinSelectorMembers(groupName: String, proxies: List<Proxy>): List<Proxy> {
+        if (!groupName.contains("节点选择", true))
+            return proxies
+
+        val rules: List<(String) -> Boolean> = listOf(
+            { n -> n.contains("自动选择", true) || n.contains("auto", true) },
+            { n -> n.contains("故障转移", true) || n.contains("fallback", true) },
+            { n -> n.contains("负载均衡", true) || n.contains("loadbalance", true) },
+            SpeedTestProfile::isVideoGroup,
+        )
+
+        val pinned = List(rules.size) { mutableListOf<Proxy>() }
+        val rest = mutableListOf<Proxy>()
+
+        outer@ for (proxy in proxies) {
+            if (!proxy.isGroup) {
+                rest.add(proxy)
+
+                continue
+            }
+
+            for (rule in rules.indices) {
+                if (rules[rule](proxy.name)) {
+                    pinned[rule].add(proxy)
+
+                    continue@outer
+                }
+            }
+
+            rest.add(proxy)
         }
 
         return pinned.flatten() + rest
