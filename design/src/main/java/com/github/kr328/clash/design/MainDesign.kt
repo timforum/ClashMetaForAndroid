@@ -16,7 +16,6 @@ import kotlinx.coroutines.withContext
 class MainDesign(context: Context) : Design<MainDesign.Request>(context) {
     enum class Request {
         ToggleStatus,
-        ToggleWatchOnline,
         OpenProxy,
         OpenProfiles,
         OpenProviders,
@@ -64,12 +63,6 @@ class MainDesign(context: Context) : Design<MainDesign.Request>(context) {
     suspend fun setHasProviders(has: Boolean) {
         withContext(Dispatchers.Main) {
             binding.hasProviders = has
-        }
-    }
-
-    suspend fun setWatchOnline(on: Boolean) {
-        withContext(Dispatchers.Main) {
-            binding.watchOnline = on
         }
     }
 
