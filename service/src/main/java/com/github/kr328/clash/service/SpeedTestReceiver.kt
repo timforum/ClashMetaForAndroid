@@ -130,15 +130,23 @@ class SpeedTestReceiver : BroadcastReceiver() {
         }
 
         /**
-         * Arms the next watch pass of the node each enabled group is
-         * connected through, or cancels it when no group is enabled any more.
+         * Arms the watch pass of the node each enabled group is connected
+         * through, or cancels it when the drawer's online-watch switch is
+         * off or no group is enabled any more.
          *
-         * Deliberately far tighter than [scheduleNext]: a watch pass costs a
-         * free traffic snapshot per group and only spends a probe when that
-         * snapshot says the node in use stopped carrying, so a tight rhythm
-         * answers a stalled connection without spending the device's data on
-         * the check. A minimum of one minute keeps a mistyped value from
-         * turning the watch into a probe loop.
+         * The rhythm this arms is the switch, not the old minutes row: one
+         * pass costs a free traffic snapshot per group and only spends a
+         * probe when that snapshot says the node in use stopped carrying, so
+         * a tight rhythm answers a stalled connection without spending the
+         * device's data on the check — while the reader is actually riding
+         * the tunnel. An idle connection walks the paid-probe arm of the
+         * funnel every pass, which is exactly why the switch exists: the
+         * top-of-the-minute pace is the reader's own choice, made once at
+         * the drawer, not a number buried in the intervals screen.
+         *
+         * Safe to call from the UI process: the alarm is held by the system
+         * and the pending intent names this receiver explicitly, so delivery
+         * always ends up in :background regardless of who armed it.
          */
         fun scheduleWatch(context: Context) {
             val intent = watchIntentOf(context)
@@ -154,9 +162,15 @@ class SpeedTestReceiver : BroadcastReceiver() {
                 return
             }
 
-            val delay = TimeUnit.MINUTES.toMillis(store.speedTestWatchMinutes.coerceAtLeast(1))
+            if (!store.speedTestWatchOnline) {
+                Log.d("speedtest: online watch off, no watch scheduled")
 
-            Log.d("speedtest: next watch in ${delay / 60000} minutes")
+                return
+            }
+
+            val delay = WATCH_ONLINE_INTERVAL_MS
+
+            Log.d("speedtest: next watch in ${delay / 1000} seconds")
 
             alarm.set(AlarmManager.RTC, System.currentTimeMillis() + delay, intent)
         }
@@ -164,6 +178,20 @@ class SpeedTestReceiver : BroadcastReceiver() {
         fun cancelWatch(context: Context) {
             context.getSystemService<AlarmManager>()?.cancel(watchIntentOf(context))
         }
+
+        /**
+         * The heartbeat the online-watch switch arms: a 10 second pass.
+         *
+         * The interval lives here rather than in the intervals screen on
+         * purpose. The snapshot half of a pass is free, so when the reader
+         * rides the tunnel the tight pace costs nothing; but an idle
+         * connection draws the paid-probe arm of the funnel on every pass,
+         * and at ten seconds that is 2.2 GiB a day - 256 KiB per probe,
+         * 8,640 probes. Leaving the number out of the settings is what keeps
+         * the switch honest: it is the reader saying "watch me now", and the
+         * reader who wants to stop paying simply drops the switch again.
+         */
+        private const val WATCH_ONLINE_INTERVAL_MS = 10_000L
 
         /**
          * Arms the video group's fast pass, or cancels it when no video group

@@ -462,14 +462,14 @@ class ServiceStore(context: Context) {
     fun effectiveSpeedTestIntervalMs(): Long =
         effectiveSpeedTestIntervalMinutes() * 60_000L
 
-    // How often the watch of the node each enabled group is connected through
-    // re-checks it. Deliberately far tighter than speedTestIntervalMinutes:
-    // the watch is the cheap half (a free traffic snapshot per group, plus a
-    // probe only when that snapshot says something is wrong), and a stalled
-    // connection is what a reader notices first.
-    var speedTestWatchMinutes by store.long(
-        key = "speed_test_watch_minutes",
-        defaultValue = 2L
+    // 主页抽屉的「在线监测」开关（.74）。打开：SPEEDTEST_WATCH 以固定 10 秒
+    // 节奏盯每个开着的组当下骑的节点；关闭：watch 闹钟整体不排（组的全量轮、
+    // 视频快速轮、筛选发布都不受它影响）。写在 UI 进程、由 :background 的接收
+    // 器与 worker 读取，与 speed_test_groups 同一条多进程偏好。旧版每分钟
+    // watch 的分钟数设置随之退役——这把开关就是它唯一的节奏。
+    var speedTestWatchOnline by store.boolean(
+        key = "speed_test_watch_online",
+        defaultValue = false
     )
 
     /**

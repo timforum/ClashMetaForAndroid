@@ -417,8 +417,13 @@
     <string name="probtest_speed_interval_bound">%1$s nodes cannot be measured in less than %2$s</string>
     <string name="probtest_speed_interval_effective_raised">In effect: every %1$s, not the %2$s asked for — a round has to finish before the next one starts. The last round took %3$s.</string>
     <string name="probtest_speed_interval_effective_unknown">Not measured yet, so the value above is used as typed.</string>
-    <string name="probtest_watch_interval">In-use node watch interval (minutes)</string>
-    <string name="probtest_watch_interval_summary">How often the node each toggled group is connected through is re-checked, at least 1</string>
+    <!-- Online watch switch on the main drawer (.74): opening it runs the
+         in-use node watch on a fixed 10 second heartbeat; closing it stops
+         the watch alarm entirely. -->
+    <string name="watch_online_on">In-use node monitoring: ON</string>
+    <string name="watch_online_off">In-use node monitoring: OFF</string>
+    <string name="watch_online_subtext_on">Watching the node in use every 10 seconds; a dead exit is repaired within the pass</string>
+    <string name="watch_online_subtext_off">The periodic node watch does not run. Rounds and fast passes are unaffected.</string>
     <string name="probtest_video_interval">Video group fast pass interval (minutes)</string>
     <string name="probtest_video_interval_summary">How often the video group re-measures a short list, at least 5</string>
     <string name="probtest_video_round_size">Video group fast pass list size</string>

@@ -56,15 +56,6 @@ class ProbTestIntervalsDesign(
             )
 
             editableText(
-                value = srvStore::speedTestWatchMinutes,
-                adapter = NullableTextAdapter.Number,
-                title = R.string.probtest_watch_interval,
-                icon = R.drawable.ic_baseline_sync,
-                placeholder = R.string.probtest_watch_interval_summary,
-                card = true,
-            )
-
-            editableText(
                 value = srvStore::speedTestVideoIntervalMinutes,
                 adapter = NullableTextAdapter.Number,
                 title = R.string.probtest_video_interval,

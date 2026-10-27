@@ -17,6 +17,8 @@ import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.common.util.ticker
 import com.github.kr328.clash.design.MainDesign
 import com.github.kr328.clash.design.ui.ToastDuration
+import com.github.kr328.clash.service.SpeedTestReceiver
+import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.util.startClashService
 import com.github.kr328.clash.util.stopClashService
 import com.github.kr328.clash.util.withClash
@@ -58,6 +60,15 @@ class MainActivity : BaseActivity<MainDesign>() {
                             else
                                 design.startClash()
                         }
+                        MainDesign.Request.ToggleWatchOnline -> {
+                            val store = ServiceStore(this@MainActivity)
+                            val on = !store.speedTestWatchOnline
+
+                            store.speedTestWatchOnline = on
+                            design.setWatchOnline(on)
+
+                            SpeedTestReceiver.scheduleWatch(this@MainActivity)
+                        }
                         MainDesign.Request.OpenProxy ->
                             startActivity(ProxyActivity::class.intent)
                         MainDesign.Request.OpenProfiles ->
@@ -90,6 +101,7 @@ class MainActivity : BaseActivity<MainDesign>() {
 
     private suspend fun MainDesign.fetch() {
         setClashRunning(clashRunning)
+        setWatchOnline(ServiceStore(this@MainActivity).speedTestWatchOnline)
 
         val state = withClash {
             queryTunnelState()

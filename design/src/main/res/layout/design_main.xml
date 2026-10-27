@@ -26,6 +26,9 @@
         <variable
             name="hasProviders"
             type="boolean" />
+        <variable
+            name="watchOnline"
+            type="boolean" />
 
         <import type="android.view.View" />
         <import type="com.github.kr328.clash.design.MainDesign.Request" />
@@ -125,6 +128,15 @@
                     android:onClick="@{() -> self.request(Request.OpenLogs)}"
                     app:icon="@drawable/ic_baseline_assignment"
                     app:text="@string/logs" />
+
+                <com.github.kr328.clash.design.view.LargeActionCard
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginVertical="@dimen/main_card_margin_vertical"
+                    android:onClick="@{() -> self.request(Request.ToggleWatchOnline)}"
+                    app:icon="@{watchOnline ? @drawable/ic_baseline_sync : @drawable/ic_outline_not_interested}"
+                    app:subtext="@{watchOnline ? @string/watch_online_subtext_on : @string/watch_online_subtext_off}"
+                    app:text="@{watchOnline ? @string/watch_online_on : @string/watch_online_off}" />
 
                 <com.github.kr328.clash.design.view.LargeActionLabel
                     android:layout_width="match_parent"
