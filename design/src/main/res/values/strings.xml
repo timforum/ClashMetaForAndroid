@@ -420,6 +420,7 @@
     <!-- Online watch switch on the main drawer (.74): opening it runs the
          in-use node watch on a fixed 10 second heartbeat; closing it stops
          the watch alarm entirely. -->
+    <string name="watch_online_menu">In-use node monitoring (10s watch)</string>
     <string name="watch_online_on">In-use node monitoring: ON</string>
     <string name="watch_online_off">In-use node monitoring: OFF</string>
     <string name="watch_online_subtext_on">Watching the node in use every 10 seconds; a dead exit is repaired within the pass</string>

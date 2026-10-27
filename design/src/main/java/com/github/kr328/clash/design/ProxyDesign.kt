@@ -47,6 +47,9 @@ class ProxyDesign(
 
         /** The toolbar toggle for [index] changed; the activity flips the per-group state. */
         data class SpeedTest(val index: Int) : Request()
+
+        /** The three-dot online watch switch clicked; the activity flips the global state. */
+        object WatchOnline : Request()
     }
 
     private val binding = DesignProxyBinding
@@ -65,11 +68,15 @@ class ProxyDesign(
             {
                 groupNames.getOrNull(binding.pagesView.currentItem)
                     ?.let { it in serviceStore.speedTestGroups }
-            }
+            },
+            {
+                groupNames.getOrNull(binding.pagesView.currentItem)?.let {
+                    requests.trySend(Request.SpeedTest(binding.pagesView.currentItem))
+                }
+            },
+            { serviceStore.speedTestWatchOnline },
         ) {
-            groupNames.getOrNull(binding.pagesView.currentItem)?.let {
-                requests.trySend(Request.SpeedTest(binding.pagesView.currentItem))
-            }
+            requests.trySend(Request.WatchOnline)
         }
     }
 

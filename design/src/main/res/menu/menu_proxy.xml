@@ -7,6 +7,13 @@
         android:id="@+id/speed_test"
         android:checkable="true"
         android:title="@string/speed_test" />
+    <!-- The online watch is global, not per group: the same switch as the
+         main drawer's card, repeated here so the three-dot menu can flip it
+         without leaving the screen. -->
+    <item
+        android:id="@+id/watch_online"
+        android:checkable="true"
+        android:title="@string/watch_online_menu" />
     <item android:title="@string/filter">
         <menu>
             <item

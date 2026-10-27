@@ -154,6 +154,18 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                                 design.requests.send(ProxyDesign.Request.Reload(it.index))
                             }
                         }
+                        is ProxyDesign.Request.WatchOnline -> {
+                            // Global switch, so unlike the per-group toggle
+                            // there is no activity-held mark to repaint: the
+                            // menu's checkmark is redrawn at the next open,
+                            // and scheduleWatch turns the alarm on or off
+                            // right here, whichever side the flip landed on.
+                            val on = !serviceStore.speedTestWatchOnline
+
+                            serviceStore.speedTestWatchOnline = on
+
+                            SpeedTestReceiver.scheduleWatch(this@ProxyActivity)
+                        }
                         is ProxyDesign.Request.SpeedTest -> {
                             val index = it.index
                             val group = names[index]

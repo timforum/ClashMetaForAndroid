@@ -20,6 +20,8 @@ class ProxyMenu(
     private val updateConfig: () -> Unit,
     private val speedTestState: () -> Boolean?,
     private val onSpeedTestToggle: () -> Unit,
+    private val watchOnlineState: () -> Boolean,
+    private val onWatchOnlineToggle: () -> Unit,
 ) : PopupMenu.OnMenuItemClickListener {
     private val menu = PopupMenu(context, menuView)
 
@@ -27,7 +29,8 @@ class ProxyMenu(
      * The speed toggle belongs to whichever group is on screen, and that group
      * can change while the menu sits closed, so the mark is read at open time.
      * A null state means there is no group to test, which hides the item rather
-     * than leaving a switch that would do nothing.
+     * than leaving a switch that would do nothing. The online watch is global,
+     * so its mark is simply read fresh at every open.
      */
     fun show() {
         menu.menu.findItem(R.id.speed_test)?.apply {
@@ -35,6 +38,8 @@ class ProxyMenu(
 
             speedTestState()?.let { isChecked = it }
         }
+
+        menu.menu.findItem(R.id.watch_online)?.isChecked = watchOnlineState()
 
         menu.show()
     }
@@ -44,6 +49,12 @@ class ProxyMenu(
         // open to report rather than guessed at here.
         if (item.itemId == R.id.speed_test) {
             onSpeedTestToggle()
+
+            return true
+        }
+
+        if (item.itemId == R.id.watch_online) {
+            onWatchOnlineToggle()
 
             return true
         }
