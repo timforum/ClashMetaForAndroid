@@ -64,10 +64,19 @@ class ProbTestSettingsDesign(
                         R.string.probtest_progress_screening,
                         state.round,
                         state.rounds,
+                        state.done,
                         state.passed,
                         state.failed,
                     )
-                    indicator.setProgress(state.round, state.rounds)
+                    // Live ticks carry the finished-probe count, so the bar
+                    // can grind along with the round instead of jumping once
+                    // per round boundary. The boundary events fall back to the
+                    // coarser round bar.
+                    if (state.done > 0 && state.total > 0) {
+                        indicator.setProgress(state.done, state.total)
+                    } else {
+                        indicator.setProgress(state.round, state.rounds)
+                    }
                 } else {
                     indicator.summary = context.getString(R.string.probtest_screening)
                     indicator.setIndeterminate()

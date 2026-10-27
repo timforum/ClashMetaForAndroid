@@ -159,7 +159,29 @@ func probeRounds(
 
 		emit(round)
 
-		if err := probeOnce(ctx, eligible, opt, expected); err != nil {
+		// Live ticks while the round grinds. The boundary emits only fire at
+		// round edges, so a round that spends twenty minutes timing its slow
+		// probes out shows the same numbers the whole way through and reads
+		// as a hang. The ticker in probeOnce reports every few seconds
+		// instead; passed and failed keep the boundary semantics - everything
+		// not yet failed is still running - and done counts the verdicts this
+		// round has handed down.
+		before := len(nodes) - len(eligible)
+		tick := func(done, failedNow int) {
+			if onProgress == nil {
+				return
+			}
+			onProgress(Progress{
+				Round:     round,
+				Rounds:    opt.Rounds,
+				ElapsedMs: time.Since(started).Milliseconds(),
+				Passed:    len(eligible) - failedNow,
+				Failed:    before + failedNow,
+				Done:      done,
+			})
+		}
+
+		if err := probeOnce(ctx, eligible, opt, expected, tick); err != nil {
 			return nil, err
 		}
 
@@ -189,6 +211,11 @@ func probeRounds(
 // probeRetryBackoff is the pause before the single retry of a probe that never
 // produced an answer.
 const probeRetryBackoff = 500 * time.Millisecond
+
+// probeTickInterval paces the live progress of a round: fast enough that a
+// twenty-minute round visibly moves, slow enough that each tick is worth a
+// notification rewrite for a reader who is only asking whether it is alive.
+const probeTickInterval = 5 * time.Second
 
 // probeRetrySlack is the margin added to the delay limit when deciding how
 // long that retry may wait.
@@ -259,7 +286,10 @@ func needsResample(err error, delay uint16, maxDelayMs int64) bool {
 }
 
 // probeOnce probes every given node concurrently within the concurrency cap.
-func probeOnce(ctx context.Context, eligible []*node, opt Options, expected utils.IntRanges[uint16]) error {
+// notify, when set, is called from a single pacing goroutine with the count of
+// verdicts handed down so far and the count of those verdicts that eliminated
+// their node.
+func probeOnce(ctx context.Context, eligible []*node, opt Options, expected utils.IntRanges[uint16], notify func(done, failed int)) error {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, opt.Concurrency)
 
@@ -269,6 +299,38 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 	// limit, is asked once more, and these count how often that mattered. See
 	// retryableProbeFailure.
 	var resampled, saved int64
+
+	// Live progress counters. Both are atomics because the ticker goroutine
+	// reads them while the probe goroutines write.
+	var probed, roundFailed int64
+
+	if notify != nil {
+		stop := make(chan struct{})
+		stopped := make(chan struct{})
+		defer func() {
+			close(stop)
+			<-stopped
+		}()
+		go func() {
+			defer close(stopped)
+			ticker := time.NewTicker(probeTickInterval)
+			defer ticker.Stop()
+			last := -1
+			for {
+				select {
+				case <-stop:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if done := int(atomic.LoadInt64(&probed)); done != last {
+						last = done
+						notify(done, int(atomic.LoadInt64(&roundFailed)))
+					}
+				}
+			}
+		}()
+	}
 
 	for i, n := range eligible {
 		if err := ctx.Err(); err != nil {
@@ -358,10 +420,25 @@ func probeOnce(ctx context.Context, eligible []*node, opt Options, expected util
 			case <-timer.C:
 				markFailed(n, "probe did not answer in time")
 			}
+
+			// The verdict above was folded into the node by this goroutine, so
+			// reading the flag back races with nothing.
+			if n.failed {
+				atomic.AddInt64(&roundFailed, 1)
+			}
+			atomic.AddInt64(&probed, 1)
 		}(n)
 	}
 
 	wg.Wait()
+
+	if notify != nil {
+		// The boundary emit for the next round only repeats this tally at the
+		// start of that round, so close the round out with its own last word:
+		// without it the final stragglers under the ticker interval are
+		// counted nowhere until the next round opens.
+		notify(int(atomic.LoadInt64(&probed)), int(atomic.LoadInt64(&roundFailed)))
+	}
 
 	if n := atomic.LoadInt64(&resampled); n > 0 {
 		log.Infoln("probe round: %d node(s) re-sampled after an unusable first answer, %d cleared the limit", n, atomic.LoadInt64(&saved))

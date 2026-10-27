@@ -34,7 +34,7 @@ func runProbeOnce(t *testing.T, respond func(call int) (uint16, error)) (*node, 
 	n := &node{name: "n", typ: "vmess", proxy: p}
 	opt := Options{Concurrency: 1, RoundTimeout: 3 * time.Second, MaxDelayMs: 500}.withDefaults()
 
-	if err := probeOnce(context.Background(), []*node{n}, opt, utils.IntRanges[uint16]{}); err != nil {
+	if err := probeOnce(context.Background(), []*node{n}, opt, utils.IntRanges[uint16]{}, nil); err != nil {
 		t.Fatalf("probeOnce: %v", err)
 	}
 

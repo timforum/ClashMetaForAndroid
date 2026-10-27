@@ -232,11 +232,16 @@ class ProbTestWorker : BaseService() {
         val text = describe(progress)
 
         // The denominator depends on the phase: subscriptions while
-        // downloading, rounds while probing, and nothing to count towards
-        // while publishing, which is why that one stays indeterminate.
+        // downloading, finished probes while a screening round is grinding,
+        // rounds in between, and nothing to count towards while publishing,
+        // which is why that one stays indeterminate. The probe count is only
+        // known once the core's live ticks arrive - the boundary events carry
+        // no done count - and falls back to the coarser round bar there.
         val (current, total) = when (progress.stage) {
             Stage.DOWNLOADING -> progress.done to progress.total
-            Stage.SCREENING -> progress.round to progress.rounds
+            Stage.SCREENING ->
+                if (progress.done > 0 && progress.total > 0) progress.done to progress.total
+                else progress.round to progress.rounds
             Stage.SPEED_TEST -> progress.done to progress.total
             Stage.PUBLISHING -> 0 to 0
         }
@@ -289,6 +294,7 @@ class ProbTestWorker : BaseService() {
                 R.string.probtest_progress_screening,
                 progress.round,
                 progress.rounds,
+                progress.done,
                 progress.passed,
                 progress.failed,
             )
