@@ -7,6 +7,7 @@ import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
 import com.github.kr328.clash.service.store.ServiceStore
+import com.github.kr328.clash.service.util.SpeedTestProfile
 import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,7 +27,7 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
 
     override suspend fun main() {
         val mode = withClash { queryOverride(Clash.OverrideSlot.Session).mode }
-        val names = withClash { queryProxyGroupNames(uiStore.proxyExcludeNotSelectable) }
+        val names = pinnedGroupOrder(withClash { queryProxyGroupNames(uiStore.proxyExcludeNotSelectable) })
         val states = List(names.size) { ProxyState("?") }
         val unorderedStates = names.indices.map { names[it] to states[it] }.toMap()
         val reloadLock = Semaphore(10)
@@ -52,9 +53,9 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                 events.onReceive {
                     when (it) {
                         Event.ProfileLoaded -> {
-                            val newNames = withClash {
+                            val newNames = pinnedGroupOrder(withClash {
                                 queryProxyGroupNames(uiStore.proxyExcludeNotSelectable)
-                            }
+                            })
 
                             if (newNames != names) {
                                 startActivity(ProxyActivity::class.intent)
@@ -247,5 +248,49 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                 }
             }
         }
+    }
+
+    /**
+     * Pins the steering groups to the front of the tab strip.
+     *
+     * Auto, fallback and load-balance decide where traffic actually goes, and
+     * the video group is the one watched ten seconds at a time, so all four
+     * belong within a thumb's reach no matter where the subscription happened
+     * to list them. They are pinned in the declared order — auto, fallback,
+     * load-balance, YouTube — with every other group following right behind in
+     * its original order, untouched: re-sorting what the profile author
+     * arranged would only make the strip jump between profile updates.
+     *
+     * A name is claimed by the first rule that fits, so a group matching two
+     * rules is pinned once at the higher slot and never rescued by the lower.
+     * Both languages are matched because the same profile can arrive with
+     * either: 自动选择 and auto name the same idea, as do 故障转移/fallback and
+     * 负载均衡/loadbalance. The video group reuses [SpeedTestProfile]'s own
+     * marker so the tab the fast pass steers and the tab this pins stay one
+     * thing rather than drifting apart.
+     */
+    private fun pinnedGroupOrder(names: List<String>): List<String> {
+        val rules: List<(String) -> Boolean> = listOf(
+            { n -> n.contains("自动选择", true) || n.contains("auto", true) },
+            { n -> n.contains("故障转移", true) || n.contains("fallback", true) },
+            { n -> n.contains("负载均衡", true) || n.contains("loadbalance", true) },
+            SpeedTestProfile::isVideoGroup,
+        )
+
+        val pinned = List(rules.size) { mutableListOf<String>() }
+        val rest = mutableListOf<String>()
+
+        outer@ for (name in names) {
+            for (rule in rules.indices) {
+                if (rules[rule](name)) {
+                    pinned[rule].add(name)
+                    continue@outer
+                }
+            }
+
+            rest.add(name)
+        }
+
+        return pinned.flatten() + rest
     }
 }
