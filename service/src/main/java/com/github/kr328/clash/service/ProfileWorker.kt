@@ -92,6 +92,17 @@ class ProfileWorker : BaseService() {
             ProfileReceiver.scheduleNext(this, imported)
         } catch (e: Exception) {
             failed(imported.uuid, imported.name, e.message ?: "Unknown")
+
+            // Re-arm even on a failure. The update alarm is one-shot: whoever
+            // fires it does not fire again unless told, and leaving the
+            // re-arm inside the success branch ended this profile's
+            // automatic updates at the first dropped connection - the reader
+            // then sees a subscription frozen for hours despite a 30-minute
+            // setting, until some other event re-arms the alarm. Fifteen
+            // minutes is long enough that a dead exit does not turn into a
+            // notification flood, short enough that the provider's next
+            // window is not missed.
+            ProfileReceiver.scheduleRetry(this, imported)
         }
     }
 

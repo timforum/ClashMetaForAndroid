@@ -78,6 +78,28 @@ class ProfileReceiver : BroadcastReceiver() {
             intent.send(context, 0, null)
         }
 
+        /**
+         * Re-arms the update alarm after a failed attempt.
+         *
+         * The alarm the next update rides on was consumed by the attempt that
+         * failed, so without this the profile silently stops renewing - the
+         * auto-update equivalent of the tunnel coming down. A fixed fifteen
+         * minutes back off from hammering a provider that is having a bad
+         * hour; the subscription's own interval takes over again from the
+         * next successful update.
+         */
+        fun scheduleRetry(context: Context, imported: Imported) {
+            if (imported.interval < TimeUnit.MINUTES.toMillis(15))
+                return
+
+            val intent = pendingIntentOf(context, imported)
+
+            context.getSystemService<AlarmManager>()?.cancel(intent)
+
+            context.getSystemService<AlarmManager>()
+                ?.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(15), intent)
+        }
+
         fun scheduleNext(context: Context, imported: Imported) {
             val intent = pendingIntentOf(context, imported)
 
@@ -98,8 +120,18 @@ class ProfileReceiver : BroadcastReceiver() {
 
             val interval = (imported.interval - (current - last)).coerceAtLeast(0)
 
+            // Wake-up and doze-tolerant: an ordinary set(RTC) is both inexact
+            // and sleepable, and on a television that idles into doze the
+            // next renewal fired whenever the system felt like batching it -
+            // hours late, three profiles' worth of updates collapsing into
+            // one box the moment all of them woke. exact variants would buy
+            // precision that a fifteen-or-thirty minute renewal does not
+            // need and that the platform sells for a special permission; an
+            // allow-while-idle alarm reaches the maintenance window inside
+            // nine minutes wherever the box drifted, and wakes it if it
+            // must. The plugged-in television cannot object to the power.
             context.getSystemService<AlarmManager>()
-                ?.set(AlarmManager.RTC, current + interval, intent)
+                ?.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, current + interval, intent)
         }
 
         private suspend fun reset() = lock.withLock {
