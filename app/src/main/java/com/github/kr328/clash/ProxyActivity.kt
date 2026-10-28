@@ -1,9 +1,10 @@
-package com.github.kr328.clash
+﻿package com.github.kr328.clash
 
 import android.view.KeyEvent
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.model.Proxy
+import com.github.kr328.clash.core.model.ProxySort
 import com.github.kr328.clash.design.ProxyDesign
 import com.github.kr328.clash.design.model.ProxyState
 import com.github.kr328.clash.service.SpeedTestReceiver
@@ -121,19 +122,25 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
                         is ProxyDesign.Request.Reload -> {
                             launch {
                                 val groupName = names[it.index]
-                                val group = reloadLock.withPermit {
+                                val (sorted, original) = reloadLock.withPermit {
                                     withClash {
-                                        queryProxyGroup(groupName, uiStore.proxySort)
+                                        // Two reads of one query: the reader's
+                                        // own sort for the nodes, and the
+                                        // subscription's untouched order for
+                                        // the groups, which the reader asked
+                                        // to see pinned and unsorted.
+                                        queryProxyGroup(groupName, uiStore.proxySort) to
+                                            queryProxyGroup(groupName, ProxySort.Default)
                                     }
                                 }
                                 val state = states[it.index]
 
-                                state.now = group.now
+                                state.now = sorted.now
 
                                 design.updateGroup(
                                     it.index,
-                                    pinSelectorMembers(group.proxies),
-                                    group.type == "Selector",
+                                    pinSelectorMembers(groupName, sorted.proxies, original.proxies),
+                                    sorted.type == "Selector",
                                     state,
                                     unorderedStates
                                 )
@@ -304,32 +311,23 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
     }
 
     /**
-     * Pins the steering groups to the top of the proxy selector's member list.
+     * Pins the group members to the top of the group pages, unsorted.
      *
-     * The groups a subscriber picks between when steering traffic by hand —
-     * the proxy selector opens on every subscription in the same four — auto,
-     * fallback, load-balance, YouTube — are members of the selection page
-     * like any node, but they mean infrastructure rather than a country, and
-     * they sit wherever the subscription listed them among hundreds of flags.
-     * Opening the selector page therefore means scrolling to find the one row
-     * that switches every other page at once. They are pinned to the top in
-     * the declared order, and the remaining members follow in whatever order
-     * the query left them (the reader's own sort choice applied),
-     * unrecognised names untouched.
-     *
-     * Every group's member list is treated alike rather than only the
-     * selection: subscriptions name that page differently — 节点选择 here,
-     * 手动切换 or plain PROXY elsewhere — and keying on a name is what let
-     * half the subscriptions keep their steering rows buried. The list is
-     * harmless where the members are all nodes: the two-part test (it is a
-     * group, and its name matches) pins nothing in a group that carries no
-     * sub-groups, so a server whose address happens to say auto or youtube
-     * keeps its place still. A name is claimed by the first rule that fits,
-     * so a member matching two rules is pinned once at the higher slot. The
-     * video marker is [SpeedTestProfile]'s own, so the row that turns the
-     * video group and the group the fast pass steers stay one thing.
+     * On the reader's selection page every group the page carries is pinned
+     * ahead of the nodes, with the steering groups (auto, fallback,
+     * load-balance, YouTube — first rule claims a name) leading in the
+     * declared order and the remaining groups following in the subscription's
+     * own order, which is what the second, unsorted read of the same query is
+     * for: the reader's sort reorders nodes, which is their business, and the
+     * groups keep the arrangement they were written with, which was theirs.
+     * On every other group page the steering groups alone lift to the front
+     * (.79) and the rest of the list keeps the sorted order.
      */
-    private fun pinSelectorMembers(proxies: List<Proxy>): List<Proxy> {
+    private fun pinSelectorMembers(
+        groupName: String,
+        sorted: List<Proxy>,
+        original: List<Proxy>,
+    ): List<Proxy> {
         val rules: List<(String) -> Boolean> = listOf(
             { n -> n.contains("自动选择", true) || n.contains("auto", true) },
             { n ->
@@ -347,27 +345,61 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
             SpeedTestProfile::isVideoGroup,
         )
 
-        val pinned = List(rules.size) { mutableListOf<Proxy>() }
-        val rest = mutableListOf<Proxy>()
+        val isSelectorPage = listOf("节点选择", "手动切换", "手动选择")
+            .any { groupName.contains(it, true) }
 
-        outer@ for (proxy in proxies) {
-            if (!proxy.isGroup) {
+        if (!isSelectorPage) {
+            // .79: only the four steering groups lift; everything else keeps
+            // the sorted order the reader chose.
+            val pinned = List(rules.size) { mutableListOf<Proxy>() }
+            val rest = mutableListOf<Proxy>()
+
+            outer@ for (proxy in sorted) {
+                if (!proxy.isGroup) {
+                    rest.add(proxy)
+                    continue
+                }
+
+                for (rule in rules.indices) {
+                    if (rules[rule](proxy.name)) {
+                        pinned[rule].add(proxy)
+                        continue@outer
+                    }
+                }
+
                 rest.add(proxy)
-
-                continue
             }
 
+            return pinned.flatten() + rest
+        }
+
+        // Selection page: every group goes to the front, ahead of every node,
+        // and no sort the reader picks reaches them. The steering ones lead
+        // in the declared order; the rest follow in the order the
+        // subscription wrote them — that is what the second, unsorted read of
+        // the same query preserves. The nodes come last in the sorted order
+        // (the design's speed pass reorders those alone).
+        val groupsByOriginal = original.filter { it.isGroup }
+
+        val claimed = List(rules.size) { mutableListOf<Proxy>() }
+        val unclaimed = mutableListOf<Proxy>()
+
+        outer@ for (proxy in groupsByOriginal) {
             for (rule in rules.indices) {
                 if (rules[rule](proxy.name)) {
-                    pinned[rule].add(proxy)
-
+                    claimed[rule].add(proxy)
                     continue@outer
                 }
             }
 
-            rest.add(proxy)
+            unclaimed.add(proxy)
         }
 
-        return pinned.flatten() + rest
+        // A name the template listed twice keeps its first seat only.
+        val seen = mutableSetOf<String>()
+
+        val groups = (claimed.flatten() + unclaimed).filter { seen.add(it.name) }
+
+        return groups + sorted.filter { !it.isGroup }
     }
 }

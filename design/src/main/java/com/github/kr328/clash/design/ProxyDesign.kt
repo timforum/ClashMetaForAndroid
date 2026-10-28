@@ -199,7 +199,13 @@ class ProxyDesign(
             return proxies
         }
 
-        return proxies.sortedWith(
+        // The groups have no throughput of their own, so a plain sort would
+        // sink every one of them below the nodes and would undo the order the
+        // activity pinned them in. They keep their incoming order at the
+        // front, ahead of the race; only the nodes are re-sorted.
+        val (groups, nodes) = proxies.partition { it.isGroup }
+
+        return groups + nodes.sortedWith(
             compareByDescending<Proxy> { speeds[it.name] ?: 0.0 }
         )
     }
