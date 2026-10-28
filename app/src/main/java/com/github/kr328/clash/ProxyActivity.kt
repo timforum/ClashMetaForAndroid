@@ -348,6 +348,34 @@ class ProxyActivity : BaseActivity<ProxyDesign>() {
         val isSelectorPage = listOf("节点选择", "手动切换", "手动选择")
             .any { groupName.contains(it, true) }
 
+        // Video page: the provider's speed groups lead, the rest of the
+        // groups follow in the subscription's own order, and the nodes come
+        // last in the sorted order. YouTube's rules land here, so the speed
+        // pair the subscription ships (速组·自动 ahead of 速组, first claim
+        // per the stem) sits a thumb above whatever else the provider listed.
+        if (SpeedTestProfile.isVideoGroup(groupName)) {
+            val speedAuto = mutableListOf<Proxy>()
+            val speedPlain = mutableListOf<Proxy>()
+            val rest = mutableListOf<Proxy>()
+
+            for (proxy in original) {
+                if (!proxy.isGroup) {
+                    continue
+                }
+
+                when {
+                    proxy.name.contains("速组") && proxy.name.contains("自动") -> speedAuto.add(proxy)
+                    proxy.name.contains("速组") -> speedPlain.add(proxy)
+                    else -> rest.add(proxy)
+                }
+            }
+
+            val seen = mutableSetOf<String>()
+            val groups = (speedAuto + speedPlain + rest).filter { seen.add(it.name) }
+
+            return groups + sorted.filter { !it.isGroup }
+        }
+
         if (!isSelectorPage) {
             // .79: only the four steering groups lift; everything else keeps
             // the sorted order the reader chose.

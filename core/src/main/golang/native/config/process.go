@@ -135,6 +135,7 @@ func patchProxyGroups(cfg *config.RawConfig, _ string) error {
 
 	dropUnresolvableMembers(cfg)
 	injectSteeringGroups(cfg)
+	injectVideoSpeedGroups(cfg)
 	orderProxyGroups(cfg)
 
 	return nil
@@ -303,6 +304,113 @@ func injectSteeringGroups(cfg *config.RawConfig) {
 		}
 		group["proxies"] = append(inject, members...)
 		log.Infoln("proxy group [%s]: steering groups injected ahead of %d members", name, len(members))
+	}
+}
+
+// speedGroupSpecs name the provider's own speed groups the reader wants inside
+// the video group, each by a family of names, the auto variant asked first.
+// The stem 速组 covers both of the pair the provider ships today; a future
+// sibling is claimed by the same family because it belongs to the same race.
+var speedGroupSpecs = [][]string{
+	{"速组·自动", "速组自动"},
+	{"速组"},
+}
+
+// videoMarkers name the group whose members carry YouTube; the same markers
+// the interface uses to find the video page.
+var videoMarkers = []string{"油管", "youtube"}
+
+func isVideoGroup(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range videoMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// injectVideoSpeedGroups fronts the video group with the provider's speed
+// groups.
+//
+// The video group is where YouTube's rules land, and the reader wants the
+// speed family reachable from it: the same reach the selection page got from
+// the steering injection, pointed at the one page whose node the video stream
+// actually rides. Only what the configuration already defines is moved, the
+// recipient is a select group (an url-test the provider wired themselves is
+// their call, not ours), a member already there is not added twice, and the
+// injection keeps the cycle guard: a speed group that reaches back into the
+// video group through any chain is left out, since mihomo refuses to load a
+// loop and one broken profile costs more than one missing row ever saves.
+func injectVideoSpeedGroups(cfg *config.RawConfig) {
+	if len(cfg.ProxyGroup) == 0 {
+		return
+	}
+
+	byName := make(map[string]map[string]any, len(cfg.ProxyGroup))
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		if name != "" {
+			byName[name] = group
+		}
+	}
+
+	// Claim the speed groups by the first spec that fits, the auto variant
+	// ahead of the plain one, so each lands once in the user's order.
+	speeds := make([]string, 0, len(speedGroupSpecs))
+	claimed := make(map[string]bool, len(cfg.ProxyGroup))
+	for _, spec := range speedGroupSpecs {
+		for _, group := range cfg.ProxyGroup {
+			name, _ := group["name"].(string)
+			if name == "" || claimed[name] {
+				continue
+			}
+			for _, marker := range spec {
+				if strings.Contains(name, marker) {
+					speeds = append(speeds, name)
+					claimed[name] = true
+					break
+				}
+			}
+		}
+	}
+	if len(speeds) == 0 {
+		return
+	}
+
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		if !isVideoGroup(name) {
+			continue
+		}
+		groupType, _ := group["type"].(string)
+		if groupType != "select" {
+			continue
+		}
+		members, ok := group["proxies"].([]any)
+		if !ok || len(members) == 0 {
+			continue
+		}
+		has := func(member string) bool {
+			for _, entry := range members {
+				if s, _ := entry.(string); s == member {
+					return true
+				}
+			}
+			return false
+		}
+		inject := make([]any, 0, len(speeds))
+		for _, target := range speeds {
+			if target == name || has(target) || references(byName, target, name) {
+				continue
+			}
+			inject = append(inject, target)
+		}
+		if len(inject) == 0 {
+			continue
+		}
+		group["proxies"] = append(inject, members...)
+		log.Infoln("proxy group [%s]: speed groups injected ahead of %d members", name, len(members))
 	}
 }
 
