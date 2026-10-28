@@ -66,6 +66,15 @@ class MainDesign(context: Context) : Design<MainDesign.Request>(context) {
         }
     }
 
+    suspend fun setVersionName(name: String) {
+        withContext(Dispatchers.Main) {
+            // The little version the user asked to see beside the about row:
+            // the package's own name (2.11.34.80.Ai), not the dialog's two-line
+            // package plus core version, which belongs inside the dialog only.
+            binding.versionName = name
+        }
+    }
+
     suspend fun showAbout(versionName: String) {
         withContext(Dispatchers.Main) {
             val binding = DesignAboutBinding.inflate(context.layoutInflater).apply {

@@ -91,6 +91,12 @@ class MainActivity : BaseActivity<MainDesign>() {
     private suspend fun MainDesign.fetch() {
         setClashRunning(clashRunning)
 
+        // The about row carries the package's small version wherever fetch
+        // already paints, so it reads without opening the dialog.
+        setVersionName(
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        )
+
         val state = withClash {
             queryTunnelState()
         }
