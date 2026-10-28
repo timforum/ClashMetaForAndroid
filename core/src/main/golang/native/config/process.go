@@ -133,9 +133,78 @@ func patchProxyGroups(cfg *config.RawConfig, _ string) error {
 		log.Warnln("proxy group [%s]: relay was removed in mihomo, downgraded to select (chain behavior lost)", name)
 	}
 
+	dropUnresolvableMembers(cfg)
 	injectSteeringGroups(cfg)
+	orderProxyGroups(cfg)
 
 	return nil
+}
+
+// dropUnresolvableMembers clears the group members nothing in the
+// configuration answers for, instead of letting one of them fail the load.
+//
+// The embedded mihomo resolves a group's members against what it has parsed
+// so far, so a member naming a group the subscription never declares (or
+// declares later — it does not carry the newer readers' forward references)
+// kills the whole profile with "'X' not found", which readers see as a
+// failed subscription update rather than as a typo a provider made. Every
+// provider feed carries some of these; one dead row must not take the
+// tunnel down. Members the loader cannot answer for are dropped here, a
+// group's own name among them (a selector listing itself is a cycle the
+// loader would refuse), and a group left with nothing on the list is given
+// DIRECT so it keeps resolving for the rules and groups that name it —
+// worse than the member that was there, better than a page the reader
+// cannot load at all.
+func dropUnresolvableMembers(cfg *config.RawConfig) {
+	if len(cfg.ProxyGroup) == 0 {
+		return
+	}
+
+	known := map[string]bool{
+		"DIRECT": true,
+		"REJECT": true,
+		"REJECT-DROP": true,
+		"PASS":   true,
+		"COMPATIBLE": true,
+	}
+	for _, proxy := range cfg.Proxy {
+		name, _ := proxy["name"].(string)
+		if name != "" {
+			known[name] = true
+		}
+	}
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		if name != "" {
+			known[name] = true
+		}
+	}
+
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		members, ok := group["proxies"].([]any)
+		if !ok {
+			continue
+		}
+		kept := make([]any, 0, len(members))
+		for _, entry := range members {
+			member, _ := entry.(string)
+			if member == name {
+				log.Warnln("proxy group [%s]: dropped self reference", name)
+				continue
+			}
+			if !known[member] {
+				log.Warnln("proxy group [%s]: dropped unresolvable member [%s]", name, member)
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		if len(kept) == 0 {
+			log.Warnln("proxy group [%s]: every member dropped, giving it DIRECT", name)
+			kept = append(kept, "DIRECT")
+		}
+		group["proxies"] = kept
+	}
 }
 
 // selectorMarkers name the group the reader steers from. Both languages a
@@ -253,6 +322,10 @@ func isReaderSelector(group map[string]any, name string) bool {
 // references reports whether [from] reaches [to] through the proxy-group
 // graph, directly or along any chain of nested groups.
 func references(byName map[string]map[string]any, from, to string) bool {
+	return reaches(byName, from, to)
+}
+
+func reaches(byName map[string]map[string]any, from, to string) bool {
 	seen := map[string]bool{from: true}
 	stack := []string{from}
 	for len(stack) > 0 {
@@ -281,6 +354,76 @@ func references(byName map[string]map[string]any, from, to string) bool {
 		}
 	}
 	return false
+}
+
+// orderProxyGroups puts every group ahead of the groups that name it.
+//
+// The embedded mihomo resolves a group's members while it parses, one group
+// at a time, so a member naming a group the list defines later carries the
+// same "'X' not found" death as a member naming nothing at all — drops only
+// mask that; subscriptions legitimately nest a selection page several groups
+// ahead of the steering groups it lists. The groups are therefore re-emitted
+// dependencies first, every referenced group before its referrer, keeping the
+// subscription's own relative order wherever no reference constrains it (a
+// stable depth-first walk over the original list). A true cycle - groups
+// naming each other, which no reordering can unroll - has the closing member
+// dropped instead: the referrer loses one row it could not have kept anyway,
+// and the profile still loads.
+func orderProxyGroups(cfg *config.RawConfig) {
+	if len(cfg.ProxyGroup) < 2 {
+		return
+	}
+
+	byName := make(map[string]map[string]any, len(cfg.ProxyGroup))
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		if name != "" {
+			byName[name] = group
+		}
+	}
+
+	const (
+		unseen = iota
+		opened
+		done
+	)
+	state := make(map[string]int, len(cfg.ProxyGroup))
+	ordered := make([]map[string]any, 0, len(cfg.ProxyGroup))
+
+	var visit func(group map[string]any, name string)
+	visit = func(group map[string]any, name string) {
+		state[name] = opened
+
+		members, _ := group["proxies"].([]any)
+		kept := make([]any, 0, len(members))
+		for _, entry := range members {
+			member, _ := entry.(string)
+			if member == name || state[member] == opened {
+				// A back edge is the closing side of a cycle: no order can
+				// put the group before the group it is inside of, so the
+				// member goes and the rest of the list keeps loading.
+				log.Warnln("proxy group [%s]: dropped cycle closing member [%s]", name, member)
+				continue
+			}
+			kept = append(kept, entry)
+			if memberGroup, isGroup := byName[member]; isGroup && state[member] == unseen {
+				visit(memberGroup, member)
+			}
+		}
+		group["proxies"] = kept
+
+		state[name] = done
+		ordered = append(ordered, group)
+	}
+
+	for _, group := range cfg.ProxyGroup {
+		name, _ := group["name"].(string)
+		if name != "" && state[name] == unseen {
+			visit(group, name)
+		}
+	}
+
+	cfg.ProxyGroup = ordered
 }
 
 func patchProviders(cfg *config.RawConfig, profileDir string) error {
